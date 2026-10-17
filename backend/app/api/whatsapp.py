@@ -20,7 +20,13 @@ from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
 from app.db.database import get_db
-from app.db.models import CareEpisode, Patient, User, WhatsAppEvent
+from app.db.models import (
+    CareEpisode,
+    Patient,
+    User,
+    WhatsAppEvent,
+    WhatsAppNotification,
+)
 
 router = APIRouter(prefix="/api/whatsapp", tags=["WhatsApp"])
 
@@ -468,19 +474,48 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)):
 
                     current_status = (event.status or "").upper()
 
-                    # READ is terminal: delayed callbacks must not downgrade it.
+                    # Keep READ and FAILED terminal so delayed callbacks cannot
+                    # downgrade an already-final event status.
                     if current_status == "READ":
-                        continue
-
-                    # A failure callback may arrive after SENT or DELIVERED.
-                    if new_status == "FAILED":
+                        applied_status = "READ"
+                    elif current_status == "FAILED":
+                        applied_status = "FAILED"
+                    elif new_status == "FAILED":
                         if current_status in {"SENT", "DELIVERED"}:
                             event.status = "FAILED"
-                        continue
+                        applied_status = (event.status or current_status).upper()
+                    else:
+                        # Advance monotonically through SENT -> DELIVERED -> READ.
+                        if status_rank.get(new_status, 0) > status_rank.get(current_status, 0):
+                            event.status = new_status
+                        applied_status = (event.status or current_status).upper()
 
-                    # Advance monotonically through SENT -> DELIVERED -> READ.
-                    if status_rank.get(new_status, 0) > status_rank.get(current_status, 0):
-                        event.status = new_status
+                    # Keep registration notification state in sync with the
+                    # outbound event. Other manually sent messages have no row.
+                    notification = db.scalar(
+                        select(WhatsAppNotification).where(
+                            WhatsAppNotification.provider_message_id == provider_id
+                        )
+                    )
+                    if notification and applied_status in {
+                        "SENT", "DELIVERED", "READ", "FAILED"
+                    }:
+                        notification.status = applied_status
+                        notification.updated_at = datetime.now(timezone.utc)
+
+                        if applied_status == "FAILED":
+                            errors = callback.get("errors") or []
+                            if errors:
+                                first_error = errors[0]
+                                details = []
+                                error_code = first_error.get("code")
+                                error_message = first_error.get("message")
+                                if error_code is not None:
+                                    details.append(f"Provider code: {error_code}")
+                                if error_message:
+                                    details.append(str(error_message)[:500])
+                                if details:
+                                    notification.error_note = "; ".join(details)
 
         db.commit()
     except SQLAlchemyError as exc:

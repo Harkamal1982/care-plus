@@ -4,6 +4,23 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.db.models import Doctor, Patient
+from app.services.whatsapp_notifications import send_registration_template
+import logging
+
+
+from fastapi import Depends, HTTPException, Query
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.api.auth import get_current_user
+from app.db.database import get_db
+from app.db.models import Doctor, Patient
+from app.schemas.patient import PatientCreate, PatientResponse
+from app.services.whatsapp_notifications import send_registration_template
+
+
+logger = logging.getLogger(__name__)
 from app.schemas.patient import PatientCreate, PatientResponse
 from app.api.auth import get_current_user
 
@@ -19,21 +36,42 @@ def next_patient_ref(db: Session) -> str:
     count = db.scalar(select(func.count()).select_from(Patient)) or 0
     return f"PAT-{count + 1:06d}"
 @router.post("", response_model=PatientResponse, status_code=201)
-def create_patient(payload: PatientCreate, db: Session = Depends(get_db)):
+async def create_patient(payload: PatientCreate, db: Session = Depends(get_db)):
     data = payload.model_dump()
     if payload.registration_flow in ("OPD_FOLLOWUP", "SURGERY_FOLLOWUP"):
         doctor = db.get(Doctor, payload.doctor_id)
         if not doctor or not doctor.is_active:
-            raise HTTPException(status_code=422, detail="Selected doctor does not exist or is inactive.")
+            raise HTTPException(
+                status_code=422,
+                detail="Selected doctor does not exist or is inactive.",
+            )
         if doctor.department != payload.department:
-            raise HTTPException(status_code=422, detail="Selected doctor does not belong to the selected department.")
+            raise HTTPException(
+                status_code=422,
+                detail="Selected doctor does not belong to the selected department.",
+            )
+
     patient = Patient(patient_ref=next_patient_ref(db), **data)
     db.add(patient)
     try:
-        db.commit(); db.refresh(patient)
+        db.commit()
+        db.refresh(patient)
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail="Could not create patient; retry or check patient reference generation.") from exc
+        raise HTTPException(
+            status_code=409,
+            detail="Could not create patient; retry or check patient reference generation.",
+        ) from exc
+
+    # Registration is already committed. WhatsApp problems must not undo it.
+    try:
+        await send_registration_template(db, patient)
+    except Exception:
+        logger.exception(
+            "Registration WhatsApp notification failed unexpectedly for patient %s",
+            patient.patient_ref,
+        )
+
     return patient
 @router.get("", response_model=list[PatientResponse])
 def list_patients(search: str | None = Query(default=None, max_length=150), mobile_number: str | None = Query(default=None, max_length=20), db: Session = Depends(get_db)):

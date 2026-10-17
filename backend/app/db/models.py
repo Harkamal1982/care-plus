@@ -158,3 +158,56 @@ class WhatsAppEvent(Base):
     attention_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     attention_updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("staff_users.user_id"), nullable=True)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+
+
+class WhatsAppNotification(Base):
+    __tablename__ = "whatsapp_notifications"
+
+    notification_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("patients.patient_id"),
+        nullable=False,
+    )
+    notification_type: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="PENDING",
+    )
+    provider_message_id: Mapped[str | None] = mapped_column(
+        String(200),
+        nullable=True,
+        unique=True,
+    )
+    error_note: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "patient_id",
+            "notification_type",
+            name="uq_whatsapp_notification_patient_type",
+        ),
+    )
