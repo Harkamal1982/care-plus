@@ -19,6 +19,7 @@ from app.api import (
     followups,
     deletions,
     whatsapp,
+    patient_journey,
 )
 
 
@@ -137,6 +138,7 @@ app.include_router(doctors.router)
 app.include_router(followups.router)
 app.include_router(deletions.router)
 app.include_router(whatsapp.router)
+app.include_router(patient_journey.router)
 
 
 @app.get("/health")

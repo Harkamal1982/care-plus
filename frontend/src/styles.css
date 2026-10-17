@@ -75,3 +75,154 @@
 .attention-controls { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 8px; max-width: 240px; }
 .attention-controls small { white-space: normal; overflow-wrap: anywhere; }
 .attention-label { color: #9a3412; font-size: 0.82rem; }
+
+/* Patient Journey read-only timeline */
+.journey-card { max-width: 1100px; }
+.journey-heading { display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; }
+.journey-heading h2 { margin-bottom:.25rem; }
+.journey-patient { display:flex; justify-content:space-between; align-items:center; gap:1rem; margin:1rem 0; padding:1rem 1.1rem; border:1px solid #dce7e1; border-radius:12px; background:#f8fbf9; }
+.journey-patient > div:first-child { display:grid; gap:.3rem; }
+.journey-patient small { color:#668073; font-size:.7rem; font-weight:800; letter-spacing:.08em; }
+.journey-patient strong { color:#173b2d; }
+.journey-patient span { color:#63756c; font-size:.85rem; }
+.journey-count { text-align:right; display:grid; gap:.2rem; }
+.journey-count strong { font-size:1.5rem; }
+.journey-toolbar { display:flex; justify-content:flex-end; margin:1rem 0; }
+.journey-toolbar label { width:min(280px,100%); }
+.journey-timeline { position:relative; padding:.25rem 0 .5rem 1.25rem; }
+.journey-timeline:before { content:""; position:absolute; left:7px; top:10px; bottom:15px; width:2px; background:#dce7e1; }
+.journey-event { position:relative; display:grid; grid-template-columns:16px minmax(0,1fr); gap:1rem; margin:0 0 1rem; }
+.journey-dot { position:absolute; z-index:1; left:-1.25rem; top:1.15rem; width:14px; height:14px; border-radius:50%; border:3px solid white; background:#668073; box-shadow:0 0 0 1px #dce7e1; }
+.journey-dot.journey-whatsapp { background:#21865a; }
+.journey-dot.journey-followups { background:#8b6cc1; }
+.journey-dot.journey-alerts { background:#c17b31; }
+.journey-event-content { min-width:0; padding:1rem; border:1px solid #e1e9e4; border-radius:12px; background:white; }
+.journey-event-top { display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; }
+.journey-event-top h3 { margin:.3rem 0 .45rem; font-size:1rem; }
+.journey-event-top time { flex:0 0 auto; color:#75847c; font-size:.75rem; }
+.journey-category { display:inline-block; padding:.2rem .45rem; border-radius:5px; background:#edf4ef; color:#38624c; font-size:.65rem; font-weight:800; letter-spacing:.05em; }
+.journey-category.journey-whatsapp { background:#e8f6ed; color:#187344; }
+.journey-category.journey-followups { background:#f0eafd; color:#6d4ba4; }
+.journey-category.journey-alerts { background:#fff2df; color:#925b1c; }
+.journey-event-content > p { margin:.25rem 0 .65rem; line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere; }
+.journey-message { padding:.65rem .8rem; border-radius:8px; background:#f5faf6; }
+.journey-status { display:inline-block; margin:.1rem 0 .65rem; padding:.2rem .45rem; border:1px solid #dce7e1; border-radius:5px; color:#56685e; font-size:.7rem; }
+.journey-detail { display:flex; justify-content:space-between; gap:1rem; padding:.35rem 0; border-top:1px solid #f0f3f1; font-size:.78rem; }
+.journey-detail span { color:#7b8981; text-transform:capitalize; }
+.journey-detail strong { text-align:right; font-weight:600; overflow-wrap:anywhere; }
+.journey-privacy { margin-top:1rem; }
+.empty-state { padding:1.5rem; text-align:center; border:1px dashed #ccd9d0; border-radius:12px; color:#627168; }
+.empty-state h3 { margin:.2rem 0 .5rem; color:#294c39; }
+@media(max-width:700px) { .journey-heading,.journey-event-top { flex-direction:column; } .journey-event-top time { white-space:normal; } .journey-patient { align-items:flex-start; } .journey-count { text-align:left; } .journey-detail { flex-direction:column; gap:.15rem; } .journey-detail strong { text-align:left; } }
+
+
+/* Patient Journey layout correction */
+.journey-card {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.journey-timeline {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.journey-event {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.journey-event-content {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+}
+
+.journey-event-top {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  min-width: 0;
+}
+
+.journey-event-top > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.journey-event-top h3 {
+  overflow-wrap: anywhere;
+}
+
+.journey-event-top time {
+  flex: 0 0 auto;
+  white-space: normal;
+  text-align: right;
+}
+
+.journey-event-content > p,
+.journey-message {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.journey-detail {
+  min-width: 0;
+}
+
+.journey-detail strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 700px) {
+  .journey-event-top {
+    flex-direction: column;
+  }
+
+  .journey-event-top time {
+    text-align: left;
+  }
+}
+
+
+/* Final fix: make each Patient Journey card span the full row */
+.journey-event {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+.journey-event-content {
+  grid-column: 1 / -1 !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+.journey-event-content > p,
+.journey-event-content .journey-message {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+  overflow-wrap: anywhere;
+}
