@@ -1,7 +1,6 @@
-
 """WhatsApp Cloud API integration.
 
-Configure credentials in backend/.env before enabling outbound delivery.
+Configure credentials in environment variables before enabling outbound delivery.
 """
 import hashlib
 import hmac
@@ -15,6 +14,8 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
@@ -34,6 +35,7 @@ class AssignInboundMessage(BaseModel):
     patient_id: uuid.UUID
     episode_id: uuid.UUID | None = None
 
+
 class AttentionUpdate(BaseModel):
     attention_flag: bool
     attention_note: str | None = Field(default=None, max_length=1000)
@@ -42,13 +44,8 @@ class AttentionUpdate(BaseModel):
 def normalize_indian_mobile(value: str) -> str:
     """Return an Indian mobile number as 91 + 10 digits.
 
-    Accepted examples:
-      9878446888
-      +919878446888
-      919878446888
-      09878446888
-
-    Raises ValueError for unsupported formats.
+    Accepted examples: 9878446888, +919878446888, 919878446888,
+    and 09878446888.
     """
     digits = "".join(ch for ch in value if ch.isdigit())
 
@@ -59,9 +56,10 @@ def normalize_indian_mobile(value: str) -> str:
     elif len(digits) == 11 and digits.startswith("0"):
         mobile = digits[1:]
     else:
-        raise ValueError("Expected a 10-digit Indian mobile number, optionally prefixed by 0 or 91.")
+        raise ValueError(
+            "Expected a 10-digit Indian mobile number, optionally prefixed by 0 or 91."
+        )
 
-    # Indian mobile numbers normally begin with digits 6, 7, 8, or 9.
     if not re.fullmatch(r"[6-9]\d{9}", mobile):
         raise ValueError("Invalid Indian mobile number.")
 
@@ -104,8 +102,7 @@ async def send_message(payload: SendMessage, db: Session = Depends(get_db)):
         episode = db.get(CareEpisode, payload.episode_id)
         if not episode or episode.patient_id != patient.patient_id:
             raise HTTPException(
-                400,
-                "The selected episode does not belong to this patient",
+                400, "The selected episode does not belong to this patient"
             )
 
     token = os.getenv("WHATSAPP_ACCESS_TOKEN")
@@ -124,20 +121,14 @@ async def send_message(payload: SendMessage, db: Session = Depends(get_db)):
     try:
         to = normalize_indian_mobile(patient.mobile_number)
     except ValueError as exc:
-        raise HTTPException(
-            400,
-            f"Patient mobile number is invalid: {exc}",
-        ) from exc
+        raise HTTPException(400, f"Patient mobile number is invalid: {exc}") from exc
 
     body = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
         "to": to,
         "type": "text",
-        "text": {
-            "preview_url": False,
-            "body": payload.message,
-        },
+        "text": {"preview_url": False, "body": payload.message},
     }
 
     try:
@@ -159,23 +150,17 @@ async def send_message(payload: SendMessage, db: Session = Depends(get_db)):
         if response.is_error:
             error = data.get("error", {})
             error_code = error.get("code")
-            error_message = error.get("message", "unknown error")
-            raise HTTPException(
-                response.status_code,
-                f"WhatsApp API rejected message"
-                f"{f' (code {error_code})' if error_code else ''}: "
-                f"{error_message}",
-            )
+            # Do not return provider internals or potentially sensitive details.
+            detail = "WhatsApp API rejected the message"
+            if error_code is not None:
+                detail += f" (code {error_code})"
+            raise HTTPException(response.status_code, detail)
 
     except httpx.HTTPError as exc:
-        raise HTTPException(
-            502,
-            f"WhatsApp API request failed: {exc}",
-        ) from exc
+        raise HTTPException(502, "WhatsApp API request failed") from exc
 
     messages = data.get("messages") or []
     wamid = messages[0].get("id") if messages else None
-
     if not wamid:
         raise HTTPException(
             502,
@@ -193,15 +178,26 @@ async def send_message(payload: SendMessage, db: Session = Depends(get_db)):
         received_at=datetime.now(timezone.utc),
     )
 
-    db.add(event)
-    db.commit()
-    db.refresh(event)
+    try:
+        db.add(event)
+        db.commit()
+        db.refresh(event)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        # Meta may have accepted the message even though local persistence failed.
+        # Do not retry sending automatically; the webhook may still reconcile it.
+        raise HTTPException(
+            502,
+            "WhatsApp accepted or processed the request, but the message record "
+            "could not be saved. Check message progress before retrying.",
+        ) from exc
 
     return {
         "event_id": str(event.event_id),
         "status": "SENT",
         "provider_message_id": wamid,
         "recipient": to,
+        "note": "SENT means accepted by WhatsApp; delivery is confirmed by a later callback.",
     }
 
 
@@ -213,13 +209,11 @@ def progress(
         doctor_id: uuid.UUID | None = None,
         patient_id: uuid.UUID | None = None,
 ):
+    # TODO before real patient data: enforce role/assignment-level access here.
     stmt = (
         select(WhatsAppEvent, Patient, CareEpisode)
         .outerjoin(Patient, Patient.patient_id == WhatsAppEvent.patient_id)
-        .outerjoin(
-            CareEpisode,
-            CareEpisode.episode_id == WhatsAppEvent.episode_id,
-            )
+        .outerjoin(CareEpisode, CareEpisode.episode_id == WhatsAppEvent.episode_id)
         .order_by(WhatsAppEvent.received_at.desc())
         .limit(500)
     )
@@ -242,11 +236,7 @@ def progress(
                 "phone_number": event.phone_number,
                 "message_text": event.message_text,
                 "status": event.status,
-                "received_at": (
-                    event.received_at.isoformat()
-                    if event.received_at
-                    else None
-                ),
+                "received_at": event.received_at.isoformat() if event.received_at else None,
                 "patient_id": str(patient.patient_id) if patient else None,
                 "patient_ref": patient.patient_ref if patient else None,
                 "patient_name": patient.full_name if patient else None,
@@ -254,14 +244,16 @@ def progress(
                 "episode_ref": episode.episode_ref if episode else None,
                 "department": episode.department if episode else None,
                 "doctor_id": (
-                    str(episode.doctor_id)
-                    if episode and episode.doctor_id
-                    else None
+                    str(episode.doctor_id) if episode and episode.doctor_id else None
                 ),
                 "needs_review": event.patient_id is None,
                 "attention_flag": bool(event.attention_flag),
                 "attention_note": event.attention_note,
-                "attention_updated_at": event.attention_updated_at.isoformat() if event.attention_updated_at else None,
+                "attention_updated_at": (
+                    event.attention_updated_at.isoformat()
+                    if event.attention_updated_at
+                    else None
+                ),
             }
         )
 
@@ -293,12 +285,16 @@ def assign_inbound_message(
         if episode.patient_id != patient.patient_id:
             raise HTTPException(400, "Selected care episode does not belong to this patient")
 
-    # This is an explicit staff decision; never auto-match on a shared number.
     event.patient_id = patient.patient_id
     event.episode_id = episode.episode_id if episode else None
     event.status = "ASSIGNED" if episode else "ASSIGNED_NO_EPISODE"
-    db.commit()
-    db.refresh(event)
+    try:
+        db.commit()
+        db.refresh(event)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(500, "Could not assign the WhatsApp message") from exc
+
     return {
         "event_id": str(event.event_id),
         "patient_id": str(patient.patient_id),
@@ -329,16 +325,23 @@ def update_attention_flag(
     event.attention_flag = payload.attention_flag
     if payload.attention_flag:
         event.attention_note = (payload.attention_note or "").strip()
-    # Keep the last note when resolving the flag as a record of why it was raised.
     event.attention_updated_at = datetime.now(timezone.utc)
     event.attention_updated_by = current_user.user_id
-    db.commit()
-    db.refresh(event)
+
+    try:
+        db.commit()
+        db.refresh(event)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(500, "Could not update the message attention flag") from exc
+
     return {
         "event_id": str(event.event_id),
         "attention_flag": bool(event.attention_flag),
         "attention_note": event.attention_note,
-        "attention_updated_at": event.attention_updated_at.isoformat() if event.attention_updated_at else None,
+        "attention_updated_at": (
+            event.attention_updated_at.isoformat() if event.attention_updated_at else None
+        ),
     }
 
 
@@ -349,22 +352,17 @@ def verify_webhook(
         challenge: str | None = Query(None, alias="hub.challenge"),
 ):
     expected = os.getenv("WHATSAPP_VERIFY_TOKEN")
-
     if (
             mode == "subscribe"
             and expected
             and hmac.compare_digest(verify_token or "", expected)
     ):
         return Response(content=challenge or "", media_type="text/plain")
-
     raise HTTPException(403, "Webhook verification failed")
 
 
 @router.post("/webhook")
-async def receive_webhook(
-        request: Request,
-        db: Session = Depends(get_db),
-):
+async def receive_webhook(request: Request, db: Session = Depends(get_db)):
     raw = await request.body()
     app_secret = os.getenv("WHATSAPP_APP_SECRET")
     signature = request.headers.get("X-Hub-Signature-256", "")
@@ -373,11 +371,8 @@ async def receive_webhook(
         raise HTTPException(503, "WhatsApp webhook is not configured")
 
     expected = "sha256=" + hmac.new(
-        app_secret.encode(),
-        raw,
-        hashlib.sha256,
+        app_secret.encode(), raw, hashlib.sha256
     ).hexdigest()
-
     if not hmac.compare_digest(signature, expected):
         raise HTTPException(401, "Invalid webhook signature")
 
@@ -386,83 +381,113 @@ async def receive_webhook(
     except json.JSONDecodeError as exc:
         raise HTTPException(400, "Invalid JSON payload") from exc
 
-    for entry in payload.get("entry", []):
-        for change in entry.get("changes", []):
-            value = change.get("value", {})
-            contacts = {
-                c.get("wa_id"): c.get("profile", {}).get("name")
-                for c in value.get("contacts", [])
-            }
+    status_rank = {"SENT": 1, "DELIVERED": 2, "READ": 3}
 
-            for msg in value.get("messages", []):
-                wa_id = msg.get("from", "")
-                provider_id = msg.get("id")
+    try:
+        for entry in payload.get("entry", []):
+            for change in entry.get("changes", []):
+                value = change.get("value", {})
+                contacts = {
+                    contact.get("wa_id"): contact.get("profile", {}).get("name")
+                    for contact in value.get("contacts", [])
+                }
 
-                # Ignore webhook retries for already-recorded provider messages.
-                if provider_id and db.scalar(
-                        select(WhatsAppEvent.event_id).where(
-                            WhatsAppEvent.provider_message_id == provider_id
-                        )
-                ):
-                    continue
+                for msg in value.get("messages", []):
+                    wa_id = msg.get("from", "")
+                    provider_id = msg.get("id")
 
-                sender_key = sender_mobile_key(wa_id)
-                candidates = db.scalars(select(Patient)).all()
-
-                matches = []
-                if sender_key:
-                    matches = [
-                        patient
-                        for patient in candidates
-                        if sender_mobile_key(patient.mobile_number) == sender_key
-                    ]
-
-                # Never guess when multiple patient records share a number.
-                patient = matches[0] if len(matches) == 1 else None
-
-                episode = None
-                if patient:
-                    active_eps = db.scalars(
-                        select(CareEpisode)
-                        .where(
-                            CareEpisode.patient_id == patient.patient_id,
-                            CareEpisode.status == "ACTIVE",
+                    if provider_id and db.scalar(
+                            select(WhatsAppEvent.event_id).where(
+                                WhatsAppEvent.provider_message_id == provider_id
                             )
-                        .limit(2)
-                    ).all()
+                    ):
+                        continue
 
-                    if len(active_eps) == 1:
-                        episode = active_eps[0]
-
-                text_body = (
-                        msg.get("text", {}).get("body")
-                        or f"Incoming WhatsApp message type: {msg.get('type', 'unknown')}"
-                )
-
-                db.add(
-                    WhatsAppEvent(
-                        patient_id=patient.patient_id if patient else None,
-                        episode_id=episode.episode_id if episode else None,
-                        direction="INBOUND",
-                        phone_number=wa_id,
-                        message_text=text_body[:4000],
-                        provider_message_id=provider_id,
-                        status="RECEIVED" if patient else "NEEDS_REVIEW",
-                        contact_name=contacts.get(wa_id),
-                        received_at=datetime.now(timezone.utc),
+                    sender_key = sender_mobile_key(wa_id)
+                    candidates = db.scalars(select(Patient)).all()
+                    matches = (
+                        [
+                            patient
+                            for patient in candidates
+                            if sender_mobile_key(patient.mobile_number) == sender_key
+                        ]
+                        if sender_key
+                        else []
                     )
-                )
+                    patient = matches[0] if len(matches) == 1 else None
 
-            for st in value.get("statuses", []):
-                provider_id = st.get("id")
-                if provider_id:
+                    episode = None
+                    if patient:
+                        active_eps = db.scalars(
+                            select(CareEpisode)
+                            .where(
+                                CareEpisode.patient_id == patient.patient_id,
+                                CareEpisode.status == "ACTIVE",
+                                )
+                            .limit(2)
+                        ).all()
+                        if len(active_eps) == 1:
+                            episode = active_eps[0]
+
+                    text_body = msg.get("text", {}).get("body") or (
+                        f"Incoming WhatsApp message type: {msg.get('type', 'unknown')}"
+                    )
+                    event_values = {
+                        "patient_id": patient.patient_id if patient else None,
+                        "episode_id": episode.episode_id if episode else None,
+                        "direction": "INBOUND",
+                        "phone_number": wa_id,
+                        "message_text": text_body[:4000],
+                        "provider_message_id": provider_id,
+                        "status": "RECEIVED" if patient else "NEEDS_REVIEW",
+                        "contact_name": contacts.get(wa_id),
+                        "received_at": datetime.now(timezone.utc),
+                    }
+                    statement = pg_insert(WhatsAppEvent).values(**event_values)
+                    if provider_id:
+                        statement = statement.on_conflict_do_nothing(
+                            index_elements=[WhatsAppEvent.provider_message_id]
+                        )
+                    db.execute(statement)
+
+                for callback in value.get("statuses", []):
+                    provider_id = callback.get("id")
+                    new_status = str(callback.get("status", "")).upper()
+                    if not provider_id or new_status not in {
+                        "SENT", "DELIVERED", "READ", "FAILED"
+                    }:
+                        continue
+
                     event = db.scalar(
                         select(WhatsAppEvent).where(
                             WhatsAppEvent.provider_message_id == provider_id
                         )
                     )
-                    if event:
-                        event.status = str(st.get("status", event.status)).upper()
+                    if not event or event.direction != "OUTBOUND":
+                        continue
 
-    db.commit()
+                    current_status = (event.status or "").upper()
+
+                    # READ is terminal: delayed callbacks must not downgrade it.
+                    if current_status == "READ":
+                        continue
+
+                    # A failure callback may arrive after SENT or DELIVERED.
+                    if new_status == "FAILED":
+                        if current_status in {"SENT", "DELIVERED"}:
+                            event.status = "FAILED"
+                        continue
+
+                    # Advance monotonically through SENT -> DELIVERED -> READ.
+                    if status_rank.get(new_status, 0) > status_rank.get(current_status, 0):
+                        event.status = new_status
+
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Webhook processing failed; retry the delivery",
+        ) from exc
+
     return {"status": "ok"}
