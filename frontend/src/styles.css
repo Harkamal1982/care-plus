@@ -62,3 +62,16 @@
 .danger-button:hover {
   background: #fdecec;
 }
+
+
+/* WhatsApp unmatched-message review controls */
+.assignment-controls { min-width: 220px; max-width: 320px; display: grid; gap: 0.55rem; margin-top: 0.65rem; padding: 0.75rem; border: 1px solid #d9e6df; border-radius: 10px; background: #f8fbf9; }
+.assignment-controls label { display: grid; gap: 0.3rem; font-size: 0.8rem; font-weight: 600; }
+.assignment-controls select { width: 100%; min-width: 0; }
+.assignment-controls .helper { margin: 0; font-size: 0.75rem; }
+
+
+/* Staff-managed WhatsApp follow-up flags */
+.attention-controls { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 8px; max-width: 240px; }
+.attention-controls small { white-space: normal; overflow-wrap: anywhere; }
+.attention-label { color: #9a3412; font-size: 0.82rem; }

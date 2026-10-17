@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
 from app.db.database import get_db
-from app.db.models import CareEpisode, Patient, WhatsAppEvent
+from app.db.models import CareEpisode, Patient, User, WhatsAppEvent
 
 router = APIRouter(prefix="/api/whatsapp", tags=["WhatsApp"])
 
@@ -28,6 +28,15 @@ class SendMessage(BaseModel):
     patient_id: uuid.UUID
     episode_id: uuid.UUID | None = None
     message: str = Field(min_length=1, max_length=4000)
+
+
+class AssignInboundMessage(BaseModel):
+    patient_id: uuid.UUID
+    episode_id: uuid.UUID | None = None
+
+class AttentionUpdate(BaseModel):
+    attention_flag: bool
+    attention_note: str | None = Field(default=None, max_length=1000)
 
 
 def normalize_indian_mobile(value: str) -> str:
@@ -199,6 +208,7 @@ async def send_message(payload: SendMessage, db: Session = Depends(get_db)):
 @router.get("/progress", dependencies=[Depends(get_current_user)])
 def progress(
         db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
         department: str | None = None,
         doctor_id: uuid.UUID | None = None,
         patient_id: uuid.UUID | None = None,
@@ -249,10 +259,87 @@ def progress(
                     else None
                 ),
                 "needs_review": event.patient_id is None,
+                "attention_flag": bool(event.attention_flag),
+                "attention_note": event.attention_note,
+                "attention_updated_at": event.attention_updated_at.isoformat() if event.attention_updated_at else None,
             }
         )
 
     return result
+
+
+@router.patch("/events/{event_id}/assign", dependencies=[Depends(get_current_user)])
+def assign_inbound_message(
+        event_id: uuid.UUID,
+        payload: AssignInboundMessage,
+        db: Session = Depends(get_db),
+):
+    """Manually link an inbound WhatsApp event after staff review."""
+    event = db.get(WhatsAppEvent, event_id)
+    if not event:
+        raise HTTPException(404, "WhatsApp event not found")
+    if event.direction != "INBOUND":
+        raise HTTPException(400, "Only inbound WhatsApp messages can be assigned")
+
+    patient = db.get(Patient, payload.patient_id)
+    if not patient:
+        raise HTTPException(404, "Selected patient not found")
+
+    episode = None
+    if payload.episode_id:
+        episode = db.get(CareEpisode, payload.episode_id)
+        if not episode:
+            raise HTTPException(404, "Selected care episode not found")
+        if episode.patient_id != patient.patient_id:
+            raise HTTPException(400, "Selected care episode does not belong to this patient")
+
+    # This is an explicit staff decision; never auto-match on a shared number.
+    event.patient_id = patient.patient_id
+    event.episode_id = episode.episode_id if episode else None
+    event.status = "ASSIGNED" if episode else "ASSIGNED_NO_EPISODE"
+    db.commit()
+    db.refresh(event)
+    return {
+        "event_id": str(event.event_id),
+        "patient_id": str(patient.patient_id),
+        "patient_ref": patient.patient_ref,
+        "patient_name": patient.full_name,
+        "episode_id": str(episode.episode_id) if episode else None,
+        "episode_ref": episode.episode_ref if episode else None,
+        "status": event.status,
+    }
+
+
+@router.patch("/events/{event_id}/attention", dependencies=[Depends(get_current_user)])
+def update_attention_flag(
+        event_id: uuid.UUID,
+        payload: AttentionUpdate,
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db),
+):
+    """Let authenticated staff flag or resolve a message for follow-up."""
+    event = db.get(WhatsAppEvent, event_id)
+    if not event:
+        raise HTTPException(404, "WhatsApp event not found")
+    if event.direction != "INBOUND":
+        raise HTTPException(400, "Only inbound patient messages can be flagged for follow-up")
+    if payload.attention_flag and not (payload.attention_note or "").strip():
+        raise HTTPException(400, "Add a short staff note explaining why follow-up is needed")
+
+    event.attention_flag = payload.attention_flag
+    if payload.attention_flag:
+        event.attention_note = (payload.attention_note or "").strip()
+    # Keep the last note when resolving the flag as a record of why it was raised.
+    event.attention_updated_at = datetime.now(timezone.utc)
+    event.attention_updated_by = current_user.user_id
+    db.commit()
+    db.refresh(event)
+    return {
+        "event_id": str(event.event_id),
+        "attention_flag": bool(event.attention_flag),
+        "attention_note": event.attention_note,
+        "attention_updated_at": event.attention_updated_at.isoformat() if event.attention_updated_at else None,
+    }
 
 
 @router.get("/webhook")

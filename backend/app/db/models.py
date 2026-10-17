@@ -153,4 +153,8 @@ class WhatsAppEvent(Base):
     message_text: Mapped[str] = mapped_column(Text, nullable=False)
     provider_message_id: Mapped[str | None] = mapped_column(String(200), unique=True, nullable=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="RECEIVED")
+    attention_flag: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    attention_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attention_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attention_updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("staff_users.user_id"), nullable=True)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
