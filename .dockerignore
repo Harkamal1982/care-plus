@@ -1,0 +1,11 @@
+.git
+.venv
+.venv_py39_backup
+**/__pycache__
+**/*.pyc
+**/.DS_Store
+**/.env
+**/.env.*
+!.env.example
+frontend/node_modules
+frontend/dist

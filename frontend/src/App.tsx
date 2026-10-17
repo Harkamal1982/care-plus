@@ -9,7 +9,7 @@ type CallNote = { note_id: string; status: string; call_outcome: string; notes: 
 type WhatsAppEvent = { event_id: string; direction: string; phone_number: string; message_text: string; status: string; received_at: string | null; patient_id: string | null; patient_ref: string | null; patient_name: string | null; episode_id: string | null; episode_ref: string | null; department: string | null; needs_review: boolean; attention_flag: boolean; attention_note: string | null; attention_updated_at: string | null };
 type Kpis = { total_new_patients: number; opd_planned: number; opd_attended: number; opd_pending: number; surgery_planned: number; surgery_confirmed: number; surgery_refused: number; post_discharge_active_episodes: number };
 const today = (() => { const d = new Date(); const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000); return local.toISOString().slice(0, 10); })();
-const API_BASE = "";
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
 async function api<T>(path: string, token: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${API_BASE}${path}`, { ...init, headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init?.headers || {}) } });
   if (!r.ok) { const b = await r.json().catch(() => null); throw new Error(b?.detail || `Request failed (${r.status})`); }
