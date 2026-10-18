@@ -226,3 +226,61 @@
   box-sizing: border-box !important;
   overflow-wrap: anywhere;
 }
+
+/* WhatsApp image display */
+.whatsapp-image-gallery {
+  margin: 20px 0;
+  padding: 16px;
+  border: 1px solid var(--border, #dce3e8);
+  border-radius: 12px;
+}
+
+.whatsapp-image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 14px;
+}
+
+.whatsapp-image-card {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border, #dce3e8);
+  border-radius: 10px;
+}
+
+.whatsapp-image-card img {
+  display: block;
+  width: 100%;
+  height: 150px;
+  object-fit: cover;
+  border-radius: 7px;
+}
+
+.whatsapp-image-card p {
+  overflow-wrap: anywhere;
+  margin: 8px 0 4px;
+}
+
+.whatsapp-image-card small {
+  color: var(--muted, #64748b);
+}
+
+.whatsapp-message-image {
+  margin-top: 8px;
+  max-width: 180px;
+}
+
+.whatsapp-message-image img {
+  display: block;
+  width: 100%;
+  max-height: 180px;
+  object-fit: contain;
+  border-radius: 8px;
+  border: 1px solid var(--border, #dce3e8);
+}
+
+.whatsapp-message-image small {
+  display: block;
+  overflow-wrap: anywhere;
+  margin-top: 4px;
+}

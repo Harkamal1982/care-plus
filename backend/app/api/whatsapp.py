@@ -20,11 +20,17 @@ from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
 from app.db.database import get_db
+from app.services.whatsapp_media import (
+    WhatsAppMediaError,
+    create_presigned_image_url,
+    store_whatsapp_image,
+)
 from app.db.models import (
     CareEpisode,
     Patient,
     User,
     WhatsAppEvent,
+    WhatsAppMedia,
     WhatsAppNotification,
 )
 
@@ -388,6 +394,7 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(400, "Invalid JSON payload") from exc
 
     status_rank = {"SENT": 1, "DELIVERED": 2, "READ": 3}
+    media_to_process: list[tuple[uuid.UUID, str, str | None]] = []
 
     try:
         for entry in payload.get("entry", []):
@@ -401,11 +408,15 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)):
                 for msg in value.get("messages", []):
                     wa_id = msg.get("from", "")
                     provider_id = msg.get("id")
+                    message_type = msg.get("type", "unknown")
+                    image_info = msg.get("image", {}) if message_type == "image" else {}
+                    media_id = image_info.get("id")
+                    caption = image_info.get("caption")
 
                     if provider_id and db.scalar(
-                            select(WhatsAppEvent.event_id).where(
-                                WhatsAppEvent.provider_message_id == provider_id
-                            )
+                        select(WhatsAppEvent.event_id).where(
+                            WhatsAppEvent.provider_message_id == provider_id
+                        )
                     ):
                         continue
 
@@ -429,16 +440,22 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)):
                             .where(
                                 CareEpisode.patient_id == patient.patient_id,
                                 CareEpisode.status == "ACTIVE",
-                                )
+                            )
                             .limit(2)
                         ).all()
                         if len(active_eps) == 1:
                             episode = active_eps[0]
 
-                    text_body = msg.get("text", {}).get("body") or (
-                        f"Incoming WhatsApp message type: {msg.get('type', 'unknown')}"
-                    )
+                    if message_type == "image":
+                        text_body = caption or "Image received via WhatsApp"
+                    else:
+                        text_body = msg.get("text", {}).get("body") or (
+                            f"Incoming WhatsApp message type: {message_type}"
+                        )
+
+                    event_id = uuid.uuid4()
                     event_values = {
+                        "event_id": event_id,
                         "patient_id": patient.patient_id if patient else None,
                         "episode_id": episode.episode_id if episode else None,
                         "direction": "INBOUND",
@@ -449,12 +466,49 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)):
                         "contact_name": contacts.get(wa_id),
                         "received_at": datetime.now(timezone.utc),
                     }
+
                     statement = pg_insert(WhatsAppEvent).values(**event_values)
                     if provider_id:
                         statement = statement.on_conflict_do_nothing(
                             index_elements=[WhatsAppEvent.provider_message_id]
                         )
                     db.execute(statement)
+
+                    if media_id:
+                        # Resolve the persisted event in case a concurrent
+                        # webhook delivery inserted it first.
+                        event = db.get(WhatsAppEvent, event_id)
+                        if event is None and provider_id:
+                            event = db.scalar(
+                                select(WhatsAppEvent).where(
+                                    WhatsAppEvent.provider_message_id == provider_id
+                                )
+                            )
+
+                        if event and not db.scalar(
+                            select(WhatsAppMedia.media_record_id).where(
+                                WhatsAppMedia.provider_media_id == media_id
+                            )
+                        ):
+                            media_record_id = uuid.uuid4()
+                            media_mime = image_info.get("mime_type") or "application/octet-stream"
+                            media_row = pg_insert(WhatsAppMedia).values(
+                                media_record_id=media_record_id,
+                                event_id=event.event_id,
+                                provider_media_id=media_id,
+                                mime_type=media_mime,
+                                caption=caption,
+                                status="PENDING",
+                            ).on_conflict_do_nothing(
+                                index_elements=[WhatsAppMedia.provider_media_id]
+                            )
+                            media_insert_result = db.execute(media_row)
+                            # A concurrent webhook may have inserted this media
+                            # already. Only process the row created by this insert.
+                            if media_insert_result.rowcount == 1:
+                                media_to_process.append(
+                                    (media_record_id, media_id, image_info.get("sha256"))
+                                )
 
                 for callback in value.get("statuses", []):
                     provider_id = callback.get("id")
@@ -474,8 +528,6 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)):
 
                     current_status = (event.status or "").upper()
 
-                    # Keep READ and FAILED terminal so delayed callbacks cannot
-                    # downgrade an already-final event status.
                     if current_status == "READ":
                         applied_status = "READ"
                     elif current_status == "FAILED":
@@ -485,13 +537,10 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)):
                             event.status = "FAILED"
                         applied_status = (event.status or current_status).upper()
                     else:
-                        # Advance monotonically through SENT -> DELIVERED -> READ.
                         if status_rank.get(new_status, 0) > status_rank.get(current_status, 0):
                             event.status = new_status
                         applied_status = (event.status or current_status).upper()
 
-                    # Keep registration notification state in sync with the
-                    # outbound event. Other manually sent messages have no row.
                     notification = db.scalar(
                         select(WhatsAppNotification).where(
                             WhatsAppNotification.provider_message_id == provider_id
@@ -517,7 +566,10 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)):
                                 if details:
                                     notification.error_note = "; ".join(details)
 
+        # Commit events and PENDING media metadata before contacting external
+        # services, so a storage failure does not erase the inbound message.
         db.commit()
+
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(
@@ -525,4 +577,92 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)):
             detail="Webhook processing failed; retry the delivery",
         ) from exc
 
+    # Process stored media after the database commit. Image failures are recorded
+    # separately and do not cause Meta to retry the whole webhook indefinitely.
+    for media_record_id, media_id, expected_sha256 in media_to_process:
+        try:
+            stored = store_whatsapp_image(media_id, expected_sha256)
+            media_row = db.get(WhatsAppMedia, media_record_id)
+            if media_row:
+                media_row.s3_key = stored["s3_key"]
+                media_row.mime_type = stored["mime_type"]
+                media_row.byte_size = stored["byte_size"]
+                media_row.sha256 = stored["sha256"]
+                media_row.status = "STORED"
+                media_row.error_note = None
+                db.commit()
+        except WhatsAppMediaError as exc:
+            db.rollback()
+            media_row = db.get(WhatsAppMedia, media_record_id)
+            if media_row:
+                media_row.status = "FAILED"
+                media_row.error_note = str(exc)[:500]
+                db.commit()
+        except SQLAlchemyError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail="Media status update failed; retry the delivery",
+            ) from exc
+
     return {"status": "ok"}
+
+@router.get("/media")
+def list_whatsapp_media(
+    patient_id: uuid.UUID | None = Query(None),
+    event_id: uuid.UUID | None = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List stored WhatsApp images for an authenticated Care Plus staff user.
+
+    Image URLs are short-lived presigned S3 URLs. The bucket remains private.
+    """
+    if current_user.role not in {"ADMIN", "STAFF"}:
+        raise HTTPException(
+            status_code=403,
+            detail="Staff access is required to view WhatsApp images",
+        )
+    statement = (
+        select(WhatsAppMedia, WhatsAppEvent)
+        .join(WhatsAppEvent, WhatsAppMedia.event_id == WhatsAppEvent.event_id)
+        .where(
+            WhatsAppMedia.status == "STORED",
+            WhatsAppMedia.s3_key.is_not(None),
+        )
+    )
+
+    if patient_id is not None:
+        statement = statement.where(WhatsAppEvent.patient_id == patient_id)
+
+    if event_id is not None:
+        statement = statement.where(WhatsAppEvent.event_id == event_id)
+
+    rows = db.execute(
+        statement.order_by(WhatsAppMedia.created_at.desc()).limit(100)
+    ).all()
+
+    result = []
+    for media, event in rows:
+        try:
+            url = create_presigned_image_url(media.s3_key)
+        except WhatsAppMediaError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Image storage is temporarily unavailable",
+            ) from exc
+
+        result.append({
+            "media_record_id": str(media.media_record_id),
+            "event_id": str(event.event_id),
+            "patient_id": str(event.patient_id) if event.patient_id else None,
+            "direction": event.direction,
+            "caption": media.caption,
+            "mime_type": media.mime_type,
+            "byte_size": media.byte_size,
+            "created_at": media.created_at.isoformat() if media.created_at else None,
+            "url": url,
+            "url_expires_in": 300,
+        })
+
+    return {"items": result}

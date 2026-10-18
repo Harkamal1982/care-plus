@@ -161,6 +161,37 @@ class WhatsAppEvent(Base):
 
 
 
+class WhatsAppMedia(Base):
+    """Metadata for an inbound WhatsApp image stored privately in S3."""
+
+    __tablename__ = "whatsapp_media"
+
+    media_record_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("whatsapp_events.event_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    provider_media_id: Mapped[str] = mapped_column(
+        String(200), nullable=False, unique=True
+    )
+    s3_key: Mapped[str | None] = mapped_column(String(1024), nullable=True, unique=True)
+    mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    byte_size: Mapped[int | None] = mapped_column(nullable=True)
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    caption: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="PENDING", server_default="PENDING"
+    )
+    error_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class WhatsAppNotification(Base):
     __tablename__ = "whatsapp_notifications"
 
