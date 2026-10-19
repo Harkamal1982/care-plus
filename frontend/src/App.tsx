@@ -147,15 +147,15 @@ export default function App() {
     const path = `/api/whatsapp/media${q.toString() ? `?${q.toString()}` : ""}`;
 
     api<{ items: WhatsAppMedia[] }>(path, token)
-      .then(result => {
-        if (!cancelled) setWhatsappMedia(result.items || []);
-      })
-      .catch(e => {
-        if (!cancelled) {
-          setWhatsappMedia([]);
-          setError(`Could not load WhatsApp images: ${(e as Error).message}`);
-        }
-      });
+        .then(result => {
+          if (!cancelled) setWhatsappMedia(result.items || []);
+        })
+        .catch(e => {
+          if (!cancelled) {
+            setWhatsappMedia([]);
+            setError(`Could not load WhatsApp images: ${(e as Error).message}`);
+          }
+        });
 
     return () => {
       cancelled = true;
@@ -200,7 +200,7 @@ export default function App() {
       await refresh(); setSelectedPatientId(p.patient_id); setSelectedEpisodeId(""); setEf(emptyEpisodeForm(p.patient_id)); setTf(emptyTaskForm());
       setPf(emptyPatientForm());
       if (flow === "DISCHARGE") {
-        setMessage(`Patient registered: ${p.patient_ref}. Continue by creating a care episode.`);
+        setMessage(`Patient registered: ${p.patient_ref}. Continue by creating a visit.`);
         setTab("episodes");
       } else {
         const appointmentDate = flow === "OPD_FOLLOWUP" ? p.visit_date : p.surgery_date;
@@ -210,20 +210,42 @@ export default function App() {
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
   async function submitEpisode(e: FormEvent) {
-    e.preventDefault(); setBusy(true); setError("");
+    e.preventDefault();
+    setError("");
+
+    if (ef.admission_date && ef.admission_date > ef.discharge_date) {
+      setError("Admission date cannot be later than discharge date.");
+      return;
+    }
+
+    if (ef.care_start_date < ef.discharge_date) {
+      setError("Care start date cannot be earlier than discharge date.");
+      return;
+    }
+
+    if (ef.care_end_date < ef.care_start_date) {
+      setError("Care end date cannot be earlier than care start date.");
+      return;
+    }
+
+    setBusy(true);
     try {
       const ep = await api<Episode>("/api/episodes", token, { method: "POST", body: JSON.stringify({ ...ef, treating_doctor: null, doctor_id: ef.doctor_id || null, patient_id: selectedPatientId || ef.patient_id, admission_date: ef.admission_date || null }) });
       await refresh();
       setSelectedEpisodeId(ep.episode_id);
       setEf(emptyEpisodeForm(selectedPatientId));
       setTf(emptyTaskForm(ep.episode_id));
-      setMessage(`Care episode ${ep.episode_ref} created. Continue by adding a care task.`);
+      setMessage(`Visit ${ep.episode_ref} created. Continue by adding a Reminder Task.`);
       setTab("tasks");
-    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
   }
   async function submitTask(e: FormEvent) {
     e.preventDefault(); setBusy(true); setError("");
-    try { const t = await api<Task>("/api/tasks", token, { method: "POST", body: JSON.stringify(tf) }); setMessage(`Care task created: ${t.title}`); await refresh(); setTf(emptyTaskForm(selectedEpisodeId)); }
+    try { const t = await api<Task>("/api/tasks", token, { method: "POST", body: JSON.stringify(tf) }); setMessage(`Reminder Task created: ${t.title}`); await refresh(); setTf(emptyTaskForm(selectedEpisodeId)); }
     catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
   async function preview() { setError(""); try { const r = await api<{ created_count: number; note: string }>("/api/alerts/preview-due", token, { method: "POST" }); setMessage(`${r.created_count} care-task or next-day follow-up reminder preview(s) logged for today. No messages or calls were sent.`); } catch (e) { setError((e as Error).message); } }
@@ -282,12 +304,103 @@ export default function App() {
   if (!token) return <div className="shell login-shell"><main className="login-main"><section className="card login-card"><div className="logo">+</div><h1>Care<span>Plus</span></h1><p className="muted">STAFF PORTAL · POST-DISCHARGE CARE</p><h2>Sign in</h2><p>Use the staff account created by your Care Plus administrator.</p>{error && <div className="error">{error}</div>}<form onSubmit={signIn}><label>Email address<input required type="email" autoComplete="username" value={login.email} onChange={e => setLogin({ ...login, email: e.target.value })} /></label><label>Password<input required type="password" autoComplete="current-password" value={login.password} onChange={e => setLogin({ ...login, password: e.target.value })} /></label><button disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button></form></section></main></div>;
 
   return <div className="shell">
-    <aside><div className="logo">+</div><h2>Care<span>Plus</span></h2><p className="muted">POST-DISCHARGE CARE</p><nav>{[["dashboard", "Dashboard"], ["doctorview", "Doctor Performance"], ["patients", "Patients"], ["episodes", "Patient Visits"], ["tasks", "Care Plans"], ["journey", "Patient Journey"], ["opd", "OPD Follow-ups"], ["surgery", "Post-Surgery Follow-ups"], ["progress", "WhatsApp Communication"], ["doctors", "Doctor Management"]].map(([v, l]) => <button className={tab === v ? "nav active" : "nav"} onClick={() => { setTab(v); if (v === "doctors" || v === "doctorview" || v === "progress") loadDoctors().catch(e => setError(e.message)); if (v === "dashboard") loadKpis(); if (v === "progress" || v === "doctorview") loadWhatsAppProgress().catch(e => setError(e.message)); if (v === "journey") loadPatientJourney().catch(e => setError(e.message)); }} key={v}>{l}</button>)}</nav><div className="sidebar-foot"><small>{user?.full_name || user?.email}</small><button className="nav" onClick={signOut}>Sign out</button></div></aside>
+    <aside><div className="logo">+</div><h2>Care<span>Plus</span></h2><p className="muted">POST-DISCHARGE CARE</p>
+      <nav>
+        <div className="nav-section-title">OVERVIEW</div>
+        {[
+          ["dashboard", "Dashboard"],
+          ["doctorview", "Doctor's Review"],
+        ].map(([v, l]) => (
+            <button
+                key={v}
+                className={tab === v ? "nav active" : "nav"}
+                onClick={() => {
+                  setTab(v);
+                  if (v === "dashboard") loadKpis();
+                  if (v === "doctorview") {
+                    loadDoctors().catch(e => setError(e.message));
+                    loadWhatsAppProgress().catch(e => setError(e.message));
+                  }
+                }}
+            >
+              {l}
+            </button>
+        ))}
+
+        <div className="nav-section-title">PATIENT MANAGEMENT</div>
+        {[
+          ["patients", "Patients"],
+          ["episodes", "Patient Visits"],
+          ["tasks", "Reminder Tasks"],
+          ["journey", "Patient Journey"],
+        ].map(([v, l]) => (
+            <button
+                key={v}
+                className={tab === v ? "nav active" : "nav"}
+                onClick={() => {
+                  setTab(v);
+                  if (v === "journey") {
+                    loadPatientJourney().catch(e => setError(e.message));
+                  }
+                }}
+            >
+              {l}
+            </button>
+        ))}
+
+        <div className="nav-section-title">FOLLOW-UP CARE</div>
+        {[
+          ["opd", "OPD Follow-ups"],
+          ["surgery", "Pre-Surgery Follow-ups"],
+        ].map(([v, l]) => (
+            <button
+                key={v}
+                className={tab === v ? "nav active" : "nav"}
+                onClick={() => setTab(v)}
+            >
+              {l}
+            </button>
+        ))}
+
+        <div className="nav-section-title">MONITORING</div>
+        {[
+          ["progress", "WhatsApp Communication"],
+        ].map(([v, l]) => (
+            <button
+                key={v}
+                className={tab === v ? "nav active" : "nav"}
+                onClick={() => {
+                  setTab(v);
+                  loadDoctors().catch(e => setError(e.message));
+                  loadWhatsAppProgress().catch(e => setError(e.message));
+                }}
+            >
+              {l}
+            </button>
+        ))}
+
+        <div className="nav-section-title">ADMINISTRATION</div>
+        {[
+          ["doctors", "Doctor Management"],
+        ].map(([v, l]) => (
+            <button
+                key={v}
+                className={tab === v ? "nav active" : "nav"}
+                onClick={() => {
+                  setTab(v);
+                  loadDoctors().catch(e => setError(e.message));
+                }}
+            >
+              {l}
+            </button>
+        ))}
+      </nav>
+      <div className="sidebar-foot"><small>{user?.full_name || user?.email}</small><button className="nav" onClick={signOut}>Sign out</button></div></aside>
     <main className="main">
-      <header><div><p className="eyebrow">CARE MANAGEMENT / MVP</p><h1>{(({ dashboard: "Hospital dashboard", doctorview: "Doctor Performance", patients: "Patients", episodes: "Patient Visits", tasks: "Care Plans", doctors: "Doctor Management", opd: "OPD Follow-ups", surgery: "Post-Surgery Follow-ups", progress: "WhatsApp Communication", journey: "Patient Journey" }) as Record<string, string>)[tab] || "Care Plus"}</h1><p className="muted">Signed in as {user?.role || "staff"}</p></div><button className="secondary" onClick={preview}>Preview due alerts</button></header>
+      <header><div><p className="eyebrow">CARE MANAGEMENT / MVP</p><h1>{(({ dashboard: "Hospital dashboard", doctorview: "Doctor's Review", patients: "Patients", episodes: "Patient Visits", tasks: "Reminder Tasks", doctors: "Doctor Management", opd: "OPD Follow-ups", surgery: "Pre-Surgery Follow-ups", progress: "WhatsApp Communication", journey: "Patient Journey" }) as Record<string, string>)[tab] || "Care Plus"}</h1><p className="muted">Signed in as {user?.role || "staff"}</p></div>{tab === "dashboard" && <button className="secondary" onClick={preview}>Preview due alerts</button>}</header>
       {selectedPatient ? <section className="patient-context"><div><small>ACTIVE PATIENT</small><strong>{selectedPatient.patient_ref} · {selectedPatient.full_name}</strong><span>{selectedPatient.mobile_number}{selectedPatient.date_of_birth ? ` · DOB ${selectedPatient.date_of_birth}` : ""}{selectedPatient.gender ? ` · ${selectedPatient.gender}` : ""}</span><span>{selectedPatient.registration_flow === "DISCHARGE" ? "Post-hospitalisation care" : selectedPatient.registration_flow === "OPD_FOLLOWUP" ? `OPD follow-up: ${selectedPatient.visit_date || "date not set"}` : `Surgery follow-up: ${selectedPatient.surgery_date || "date not set"}`}</span></div><button className="secondary" onClick={() => { setSelectedPatientId(""); setSelectedEpisodeId(""); setTab("patients"); }}>Change patient</button></section> : <section className="patient-context empty-context"><div><small>NO PATIENT SELECTED</small><strong>Select or register a patient to begin</strong><span>Episodes and tasks will be shown for the selected patient only.</span></div><button className="secondary" onClick={() => setTab("patients")}>Find patient</button></section>}
       {message && <div className="message">{message}<button onClick={() => setMessage("")}>×</button></div>}{error && <div className="error">{error}</div>}
-      <section className="stats"><div><small>Total patients</small><strong>{patients.length}</strong></div><div><small>Active patient episodes</small><strong>{selectedPatient ? patientEpisodes.length : "—"}</strong></div><div><small>Active patient tasks</small><strong>{selectedPatient ? patientTasks.length : "—"}</strong></div></section>
+      {tab === "dashboard" && <section className="stats"><div><small>Total patients</small><strong>{patients.length}</strong></div><div><small>Active patient visits</small><strong>{selectedPatient ? patientEpisodes.length : "—"}</strong></div><div><small>Active Reminder Tasks</small><strong>{selectedPatient ? patientTasks.length : "—"}</strong></div></section>}
 
       {tab === "journey" && <section className="card journey-card">
         <div className="journey-heading"><div><h2>Patient Journey</h2><p className="helper">A chronological, read-only view of this patient's recorded care and communication history.</p></div><button type="button" className="secondary" disabled={!selectedPatientId || journeyLoading} onClick={() => loadPatientJourney().catch(e => setError((e as Error).message))}>{journeyLoading ? "Refreshing…" : "Refresh timeline"}</button></div>
@@ -299,17 +412,17 @@ export default function App() {
           <section className="whatsapp-image-gallery">
             <h3>WhatsApp images for this patient</h3>
             {whatsappMedia.filter(m => m.patient_id === selectedPatientId).length === 0
-              ? <p className="helper">No stored WhatsApp images are available for this patient.</p>
-              : <div className="whatsapp-image-grid">
+                ? <p className="helper">No stored WhatsApp images are available for this patient.</p>
+                : <div className="whatsapp-image-grid">
                   {whatsappMedia.filter(m => m.patient_id === selectedPatientId).map(media => (
-                    <article className="whatsapp-image-card" key={media.media_record_id}>
-                      <a href={media.url} target="_blank" rel="noreferrer">
-                        <img src={media.url} alt={media.caption || "WhatsApp image"} loading="lazy" />
-                      </a>
-                      {media.caption && <p>{media.caption}</p>}
-                      <small>{media.created_at ? new Date(media.created_at).toLocaleString() : "Date not recorded"}</small>
-                      <small>Image links expire after {media.url_expires_in} seconds.</small>
-                    </article>
+                      <article className="whatsapp-image-card" key={media.media_record_id}>
+                        <a href={media.url} target="_blank" rel="noreferrer">
+                          <img src={media.url} alt={media.caption || "WhatsApp image"} loading="lazy" />
+                        </a>
+                        {media.caption && <p>{media.caption}</p>}
+                        <small>{media.created_at ? new Date(media.created_at).toLocaleString() : "Date not recorded"}</small>
+                        <small>Image links expire after {media.url_expires_in} seconds.</small>
+                      </article>
                   ))}
                 </div>}
           </section>
@@ -317,31 +430,31 @@ export default function App() {
         </>}
       </section>}
       {tab === "doctorview" && <section className="card"><h2>Doctor patient progress overview</h2><p className="helper">A working overview of inbound patient replies, messages needing staff review, and follow-up flags. This view does not make clinical decisions; staff and doctors should review the original message and patient context.</p><div className="two"><label>Department<select value={whatsappDepartment} onChange={e => { setWhatsappDepartment(e.target.value); setWhatsappDoctor(""); }}><option value="">All departments</option>{departments.map(d => <option key={d}>{d}</option>)}</select></label><label>Doctor<select value={whatsappDoctor} onChange={e => setWhatsappDoctor(e.target.value)}><option value="">All doctors</option>{managedDoctors.filter(d => d.is_active !== false && (!whatsappDepartment || d.department === whatsappDepartment)).map(d => <option key={d.doctor_id} value={d.doctor_id}>{d.full_name}</option>)}</select></label></div><button type="button" className="secondary" onClick={() => loadWhatsAppProgress().catch(e => setError(e.message))}>Refresh patient progress</button><div className="stats kpi-grid"><div><small>Inbound replies</small><strong>{whatsappEvents.filter(w => w.direction === "INBOUND").length}</strong></div><div><small>Assigned to patient</small><strong>{whatsappEvents.filter(w => w.direction === "INBOUND" && !!w.patient_id).length}</strong></div><div><small>Needs review</small><strong>{whatsappEvents.filter(w => w.needs_review).length}</strong></div><div><small>Flagged for follow-up</small><strong>{whatsappEvents.filter(w => w.attention_flag).length}</strong></div></div><h3>Latest patient replies</h3><div className="table-scroll"><table><thead><tr><th>Date / time</th><th>Patient</th><th>Episode / department</th><th>Latest reply</th><th>Follow-up</th></tr></thead><tbody>{whatsappEvents.filter(w => w.direction === "INBOUND").slice().sort((a,b) => (b.received_at || "").localeCompare(a.received_at || "")).slice(0,100).map(w => <tr key={w.event_id}><td>{w.received_at ? new Date(w.received_at).toLocaleString() : "—"}</td><td>{w.patient_name || "Unmatched patient"}<small>{w.patient_ref || w.phone_number}</small></td><td>{w.episode_ref || "—"}<small>{w.department || "—"}</small></td><td>{w.message_text}
-          {whatsappMedia.filter(m => m.event_id === w.event_id).map(media => (
+        {whatsappMedia.filter(m => m.event_id === w.event_id).map(media => (
             <div className="whatsapp-message-image" key={media.media_record_id}>
               <a href={media.url} target="_blank" rel="noreferrer">
                 <img src={media.url} alt={media.caption || "WhatsApp attachment"} loading="lazy" />
               </a>
               {media.caption && <small>{media.caption}</small>}
             </div>
-          ))}
-        </td><td>{w.needs_review ? <strong>Needs review</strong> : w.attention_flag ? <strong className="attention-label">Flagged</strong> : "No flag"}{w.attention_note && <small>{w.attention_note}</small>}</td></tr>)}{!whatsappEvents.some(w => w.direction === "INBOUND") && <tr><td colSpan={5}>No inbound patient replies found for the selected filters.</td></tr>}</tbody></table></div><p className="helper">This overview shows up to the latest 500 WhatsApp events returned by the API. Use WhatsApp progress to assign unmatched messages or update follow-up flags.</p></section>}
-      {tab === "progress" && <section className="card"><h2>WhatsApp conversation and patient progress</h2><p className="helper">Incoming replies are linked automatically only when a unique patient and a unique active care episode can be identified. Ambiguous messages remain unassigned until staff review them.</p><div className="two"><label>Department filter<select value={whatsappDepartment} onChange={e => { setWhatsappDepartment(e.target.value); setWhatsappDoctor(""); }}><option value="">All departments</option>{departments.map(d => <option key={d}>{d}</option>)}</select></label><label>Doctor filter<select value={whatsappDoctor} onChange={e => setWhatsappDoctor(e.target.value)}><option value="">All doctors</option>{managedDoctors.filter(d => d.is_active !== false && (!whatsappDepartment || d.department === whatsappDepartment)).map(d => <option key={d.doctor_id} value={d.doctor_id}>{d.full_name}</option>)}</select></label></div><div className="two"><label>Follow-up filter<select value={whatsappAttentionFilter} onChange={e => setWhatsappAttentionFilter(e.target.value)}><option value="ALL">All messages</option><option value="FLAGGED">Flagged for follow-up</option><option value="UNFLAGGED">Not flagged</option></select></label><div><span className="helper">Showing up to the latest 500 events</span><button type="button" className="secondary" onClick={() => loadWhatsAppProgress().catch(e => setError(e.message))}>Refresh messages</button></div></div><div className="table-scroll"><table><thead><tr><th>Date / time</th><th>Direction</th><th>Patient</th><th>Episode / department</th><th>Message</th><th>Status / action</th></tr></thead><tbody>{whatsappEvents.filter(w => whatsappAttentionFilter === "ALL" || (whatsappAttentionFilter === "FLAGGED" ? w.attention_flag : !w.attention_flag)).map(w => <tr key={w.event_id}><td>{w.received_at ? new Date(w.received_at).toLocaleString() : "—"}</td><td>{w.direction}</td><td>{w.patient_name ? <>{w.patient_name}<small>{w.patient_ref}</small></> : <>{w.phone_number}<small>Unmatched patient</small></>}</td><td>{w.episode_ref || "—"}<small>{w.department || "—"}</small></td><td>{w.message_text}
-          {whatsappMedia.filter(m => m.event_id === w.event_id).map(media => (
+        ))}
+      </td><td>{w.needs_review ? <strong>Needs review</strong> : w.attention_flag ? <strong className="attention-label">Flagged</strong> : "No flag"}{w.attention_note && <small>{w.attention_note}</small>}</td></tr>)}{!whatsappEvents.some(w => w.direction === "INBOUND") && <tr><td colSpan={5}>No inbound patient replies found for the selected filters.</td></tr>}</tbody></table></div><p className="helper">This overview shows up to the latest 500 WhatsApp events returned by the API. Use WhatsApp progress to assign unmatched messages or update follow-up flags.</p></section>}
+      {tab === "progress" && <section className="card"><h2>WhatsApp conversation and patient progress</h2><p className="helper">Incoming replies are linked automatically only when a unique patient and a unique active visit can be identified. Ambiguous messages remain unassigned until staff review them.</p><div className="two"><label>Department filter<select value={whatsappDepartment} onChange={e => { setWhatsappDepartment(e.target.value); setWhatsappDoctor(""); }}><option value="">All departments</option>{departments.map(d => <option key={d}>{d}</option>)}</select></label><label>Doctor filter<select value={whatsappDoctor} onChange={e => setWhatsappDoctor(e.target.value)}><option value="">All doctors</option>{managedDoctors.filter(d => d.is_active !== false && (!whatsappDepartment || d.department === whatsappDepartment)).map(d => <option key={d.doctor_id} value={d.doctor_id}>{d.full_name}</option>)}</select></label></div><div className="two"><label>Follow-up filter<select value={whatsappAttentionFilter} onChange={e => setWhatsappAttentionFilter(e.target.value)}><option value="ALL">All messages</option><option value="FLAGGED">Flagged for follow-up</option><option value="UNFLAGGED">Not flagged</option></select></label><div><span className="helper">Showing up to the latest 500 events</span><button type="button" className="secondary" onClick={() => loadWhatsAppProgress().catch(e => setError(e.message))}>Refresh messages</button></div></div><div className="table-scroll"><table><thead><tr><th>Date / time</th><th>Direction</th><th>Patient</th><th>Episode / department</th><th>Message</th><th>Status / action</th></tr></thead><tbody>{whatsappEvents.filter(w => whatsappAttentionFilter === "ALL" || (whatsappAttentionFilter === "FLAGGED" ? w.attention_flag : !w.attention_flag)).map(w => <tr key={w.event_id}><td>{w.received_at ? new Date(w.received_at).toLocaleString() : "—"}</td><td>{w.direction}</td><td>{w.patient_name ? <>{w.patient_name}<small>{w.patient_ref}</small></> : <>{w.phone_number}<small>Unmatched patient</small></>}</td><td>{w.episode_ref || "—"}<small>{w.department || "—"}</small></td><td>{w.message_text}
+        {whatsappMedia.filter(m => m.event_id === w.event_id).map(media => (
             <div className="whatsapp-message-image" key={media.media_record_id}>
               <a href={media.url} target="_blank" rel="noreferrer">
                 <img src={media.url} alt={media.caption || "WhatsApp attachment"} loading="lazy" />
               </a>
               {media.caption && <small>{media.caption}</small>}
             </div>
-          ))}
-        </td><td>{w.needs_review ? <><strong>Needs review</strong><div><button type="button" className="small-button" onClick={() => { setAssigningWhatsAppEvent(assigningWhatsAppEvent === w.event_id ? "" : w.event_id); setWhatsappAssignments(a => ({ ...a, [w.event_id]: a[w.event_id] || { patient_id: "", episode_id: "" } })); }}>{assigningWhatsAppEvent === w.event_id ? "Cancel" : "Review / assign"}</button></div>{assigningWhatsAppEvent === w.event_id && <div className="assignment-controls"><label>Patient<select value={whatsappAssignments[w.event_id]?.patient_id || ""} onChange={e => setWhatsappAssignments(a => ({ ...a, [w.event_id]: { patient_id: e.target.value, episode_id: "" } }))}><option value="">Select patient…</option>{patients.map(p => <option key={p.patient_id} value={p.patient_id}>{p.patient_ref} — {p.full_name}</option>)}</select></label><label>Care episode (optional)<select value={whatsappAssignments[w.event_id]?.episode_id || ""} onChange={e => setWhatsappAssignments(a => ({ ...a, [w.event_id]: { ...(a[w.event_id] || { patient_id: "" }), episode_id: e.target.value } }))}><option value="">No episode selected</option>{episodes.filter(ep => ep.patient_id === whatsappAssignments[w.event_id]?.patient_id).map(ep => <option key={ep.episode_id} value={ep.episode_id}>{ep.episode_ref} — {ep.department} ({ep.status})</option>)}</select></label><button type="button" disabled={busy || !whatsappAssignments[w.event_id]?.patient_id} onClick={() => assignWhatsAppMessage(w.event_id)}>{busy ? "Saving…" : "Save assignment"}</button><p className="helper">Choose the patient after verifying the sender. An episode can only be assigned to that same patient.</p></div>}</> : w.status}{w.direction === "INBOUND" && <div className="attention-controls">{w.attention_flag && <><strong className="attention-label">Flagged for follow-up</strong>{w.attention_note && <small>Staff note: {w.attention_note}</small>}</>}<button type="button" className="small-button" onClick={() => updateWhatsAppAttention(w).catch(e => setError((e as Error).message))}>{w.attention_flag ? "Resolve flag" : "Flag for follow-up"}</button></div>}</td></tr>)}{!whatsappEvents.filter(w => whatsappAttentionFilter === "ALL" || (whatsappAttentionFilter === "FLAGGED" ? w.attention_flag : !w.attention_flag)).length && <tr><td colSpan={6}>{whatsappEvents.length ? "No messages match this follow-up filter." : "No WhatsApp events yet. Configure the WhatsApp Cloud API and webhook to receive real messages."}</td></tr>}</tbody></table></div><p className="helper">Do not use WhatsApp messages as a substitute for emergency services or clinical assessment. Patient consent, privacy notices, access controls, retention, and approved message templates must be configured before production use.</p></section>}
+        ))}
+      </td><td>{w.needs_review ? <><strong>Needs review</strong><div><button type="button" className="small-button" onClick={() => { setAssigningWhatsAppEvent(assigningWhatsAppEvent === w.event_id ? "" : w.event_id); setWhatsappAssignments(a => ({ ...a, [w.event_id]: a[w.event_id] || { patient_id: "", episode_id: "" } })); }}>{assigningWhatsAppEvent === w.event_id ? "Cancel" : "Review / assign"}</button></div>{assigningWhatsAppEvent === w.event_id && <div className="assignment-controls"><label>Patient<select value={whatsappAssignments[w.event_id]?.patient_id || ""} onChange={e => setWhatsappAssignments(a => ({ ...a, [w.event_id]: { patient_id: e.target.value, episode_id: "" } }))}><option value="">Select patient…</option>{patients.map(p => <option key={p.patient_id} value={p.patient_id}>{p.patient_ref} — {p.full_name}</option>)}</select></label><label>Visit (optional)<select value={whatsappAssignments[w.event_id]?.episode_id || ""} onChange={e => setWhatsappAssignments(a => ({ ...a, [w.event_id]: { ...(a[w.event_id] || { patient_id: "" }), episode_id: e.target.value } }))}><option value="">No episode selected</option>{episodes.filter(ep => ep.patient_id === whatsappAssignments[w.event_id]?.patient_id).map(ep => <option key={ep.episode_id} value={ep.episode_id}>{ep.episode_ref} — {ep.department} ({ep.status})</option>)}</select></label><button type="button" disabled={busy || !whatsappAssignments[w.event_id]?.patient_id} onClick={() => assignWhatsAppMessage(w.event_id)}>{busy ? "Saving…" : "Save assignment"}</button><p className="helper">Choose the patient after verifying the sender. An episode can only be assigned to that same patient.</p></div>}</> : w.status}{w.direction === "INBOUND" && <div className="attention-controls">{w.attention_flag && <><strong className="attention-label">Flagged for follow-up</strong>{w.attention_note && <small>Staff note: {w.attention_note}</small>}</>}<button type="button" className="small-button" onClick={() => updateWhatsAppAttention(w).catch(e => setError((e as Error).message))}>{w.attention_flag ? "Resolve flag" : "Flag for follow-up"}</button></div>}</td></tr>)}{!whatsappEvents.filter(w => whatsappAttentionFilter === "ALL" || (whatsappAttentionFilter === "FLAGGED" ? w.attention_flag : !w.attention_flag)).length && <tr><td colSpan={6}>{whatsappEvents.length ? "No messages match this follow-up filter." : "No WhatsApp events yet. Configure the WhatsApp Cloud API and webhook to receive real messages."}</td></tr>}</tbody></table></div><p className="helper">Do not use WhatsApp messages as a substitute for emergency services or clinical assessment. Patient consent, privacy notices, access controls, retention, and approved message templates must be configured before production use.</p></section>}
 
-      {tab === "patients" && <div className="page-grid"><section className="card"><h2>Register patient</h2><p className="helper">After saving, Care Plus automatically opens the care episode form for this patient.</p><form autoComplete="off" onSubmit={submitPatient}>
+      {tab === "patients" && <div className="page-grid"><section className="card"><h2>Register patient</h2><p className="helper">After saving, Care Plus automatically opens the visit form for this patient.</p><form autoComplete="off" onSubmit={submitPatient}>
         <label>Care pathway *<select required value={pf.registration_flow} onChange={e => setPf({ ...pf, registration_flow: e.target.value as typeof pf.registration_flow, visit_date: "", surgery_date: "", department: "", doctor_id: "" })}><option value="DISCHARGE">Discharge — post-hospitalisation care</option><option value="OPD_FOLLOWUP">OPD follow-up</option><option value="SURGERY_FOLLOWUP">Surgery follow-up</option></select></label>
-        <p className="helper">{pf.registration_flow === "DISCHARGE" ? "Continue to the existing care episode and home-care task workflow after registration." : pf.registration_flow === "OPD_FOLLOWUP" ? "No admission or discharge episode is required. A reminder preview is due one day before the OPD visit." : "No admission or discharge episode is required. A reminder preview is due one day before surgery."}</p>
+        <p className="helper">{pf.registration_flow === "DISCHARGE" ? "Continue to the existing visit and home-Reminder Task workflow after registration." : pf.registration_flow === "OPD_FOLLOWUP" ? "No admission or discharge episode is required. A reminder preview is due one day before the OPD visit." : "No admission or discharge episode is required. A reminder preview is due one day before surgery."}</p>
         <label>Full name *<input required autoComplete="off" value={pf.full_name} onChange={e => setPf({ ...pf, full_name: e.target.value })} /></label>
-        <label>Mobile number *<input required minLength={8} maxLength={20} autoComplete="off" placeholder="+91…" value={pf.mobile_number} onChange={e => setPf({ ...pf, mobile_number: e.target.value })} /></label>
+        <label>Mobile number *<input required type="tel" inputMode="numeric" pattern="[6-9][0-9]{9}" minLength={10} maxLength={10} autoComplete="off" placeholder="10-digit mobile number" value={pf.mobile_number} onChange={e => setPf({ ...pf, mobile_number: e.target.value.replace(/\D/g, "").slice(0, 10) })} /></label>
         <div className="two"><label>Date of birth<input type="date" value={pf.date_of_birth} onChange={e => setPf({ ...pf, date_of_birth: e.target.value })} /></label><label>Gender<select value={pf.gender} onChange={e => setPf({ ...pf, gender: e.target.value })}><option value="">Not specified</option><option>Female</option><option>Male</option><option>Other</option><option>Prefer not to say</option></select></label></div>
         <label>Email<input type="email" autoComplete="off" value={pf.email} onChange={e => setPf({ ...pf, email: e.target.value })} /></label>
         <label>Address<textarea rows={2} autoComplete="off" value={pf.address} onChange={e => setPf({ ...pf, address: e.target.value })} /></label>
@@ -356,7 +469,7 @@ export default function App() {
         <button disabled={busy}>{busy ? "Saving…" : pf.registration_flow === "DISCHARGE" ? "Register patient and continue" : "Register patient and schedule reminder"}</button>
         <small>Each patient has a unique ID; shared mobile numbers are allowed.</small>
       </form></section>
-        <section className="card"><div className="card-head"><h2>Search / select patient</h2><input aria-label="Search patients" placeholder="Name, patient ID or mobile" value={search} onChange={e => setSearch(e.target.value)} /></div><p className="helper">Select a patient to open their care episodes. All subsequent entries will stay in that patient's context.</p><div className="table-scroll"><table><thead><tr><th>Patient</th><th>Patient ref</th><th>Mobile</th><th>Flow / appointment</th><th>Status</th><th></th></tr></thead><tbody>{visiblePatients.map(p => <tr key={p.patient_id} className={p.patient_id === selectedPatientId ? "selected-row" : ""}><td>{p.full_name}</td><td>{p.patient_ref}</td><td>{p.mobile_number}</td><td>{p.registration_flow === "DISCHARGE" ? "Discharge" : p.registration_flow === "OPD_FOLLOWUP" ? `OPD: ${p.visit_date || "—"} · ${p.department || "—"} · ${p.doctor_name || "—"}` : `Surgery: ${p.surgery_date || "—"} · ${p.department || "—"} · ${p.doctor_name || "—"}`}</td><td>{p.status}</td><td><button className="small-button" onClick={() => selectPatient(p, "episodes")}>{p.patient_id === selectedPatientId ? "Selected" : "Select patient"}</button> <button type="button" className="small-button danger-button" onClick={() => deleteRecord(`/api/patients/${p.patient_id}`, "patient")}>Delete</button></td></tr>)}{!visiblePatients.length && <tr><td colSpan={6}>No matching patients.</td></tr>}</tbody></table></div></section></div>}
+        <section className="card"><div className="card-head"><h2>Search / select patient</h2><input aria-label="Search patients" placeholder="Name, patient ID or mobile" value={search} onChange={e => setSearch(e.target.value)} /></div><p className="helper">Select a patient to open their visits. All subsequent entries will stay in that patient's context.</p><div className="table-scroll"><table><thead><tr><th>Patient</th><th>Patient ref</th><th>Mobile</th><th>Flow / appointment</th><th>Status</th><th></th></tr></thead><tbody>{visiblePatients.map(p => <tr key={p.patient_id} className={p.patient_id === selectedPatientId ? "selected-row" : ""}><td>{p.full_name}</td><td>{p.patient_ref}</td><td>{p.mobile_number}</td><td>{p.registration_flow === "DISCHARGE" ? "Discharge" : p.registration_flow === "OPD_FOLLOWUP" ? `OPD: ${p.visit_date || "—"} · ${p.department || "—"} · ${p.doctor_name || "—"}` : `Surgery: ${p.surgery_date || "—"} · ${p.department || "—"} · ${p.doctor_name || "—"}`}</td><td>{p.status}</td><td><button className="small-button" onClick={() => selectPatient(p, "episodes")}>{p.patient_id === selectedPatientId ? "Selected" : "Select patient"}</button> <button type="button" className="small-button danger-button" onClick={() => deleteRecord(`/api/patients/${p.patient_id}`, "patient")}>Delete</button></td></tr>)}{!visiblePatients.length && <tr><td colSpan={6}>No matching patients.</td></tr>}</tbody></table></div></section></div>}
 
       {tab === "dashboard" && <section className="card"><h2>Hospital KPIs</h2><div className="two"><label>From date<input type="date" value={dashboardStart} onChange={e => setDashboardStart(e.target.value)} /></label><label>To date<input type="date" value={dashboardEnd} onChange={e => setDashboardEnd(e.target.value)} /></label></div><div className="two"><label>Department<select value={dashboardDepartment} onChange={e => { setDashboardDepartment(e.target.value); setDashboardDoctor(""); }}><option value="">All departments</option>{departments.filter(d => d !== "Other").map(d => <option key={d}>{d}</option>)}</select></label><label>Doctor<select value={dashboardDoctor} onChange={e => setDashboardDoctor(e.target.value)}><option value="">All doctors</option>{managedDoctors.filter(d => d.is_active !== false && (!dashboardDepartment || d.department === dashboardDepartment)).map(d => <option key={d.doctor_id} value={d.doctor_id}>{d.full_name} — {d.department}</option>)}</select></label></div><button onClick={loadKpis}>Apply filters</button>{kpis && <div className="stats kpi-grid">{[["New patients",kpis.total_new_patients],["OPD planned",kpis.opd_planned],["OPD attended",kpis.opd_attended],["OPD pending",kpis.opd_pending],["Surgery planned",kpis.surgery_planned],["Surgery confirmed",kpis.surgery_confirmed],["Surgery refused",kpis.surgery_refused],["Active post-discharge episodes",kpis.post_discharge_active_episodes]].map(([label,value]) => <div key={label}><small>{label}</small><strong>{value}</strong></div>)}</div>}<p className="helper">OPD attended counts follow-ups marked ATTENDED. Use the OPD follow-up list to update attendance status. KPIs use appointment date for OPD and surgery; active post-discharge episodes are those overlapping the selected period.</p></section>}
 
@@ -366,11 +479,11 @@ export default function App() {
 
       {tab === "surgery" && <div className="page-grid surgery-page-grid"><section className="card"><h2>Surgery follow-up register</h2><div className="two"><label>Filter by department<select value={surgeryDepartmentFilter} onChange={e => { setSurgeryDepartmentFilter(e.target.value); setSurgeryDoctorFilter(""); }}><option value="">All departments</option>{departments.map(d => <option key={d}>{d}</option>)}</select></label><label>Filter by doctor<select value={surgeryDoctorFilter} onChange={e => setSurgeryDoctorFilter(e.target.value)}><option value="">All doctors</option>{managedDoctors.filter(d => d.is_active !== false && (!surgeryDepartmentFilter || d.department === surgeryDepartmentFilter)).map(d => <option key={d.doctor_id} value={d.doctor_id}>{d.full_name}</option>)}</select></label></div><div className="table-scroll"><table><thead><tr><th>Patient</th><th>Mobile</th><th>Department / doctor</th><th>Planned / confirmed surgery date</th><th>Source</th><th>Status</th><th>Call history</th></tr></thead><tbody>{surgeryPatients.map(p => <tr key={p.patient_id}><td>{p.full_name}<small>{p.patient_ref}</small><button type="button" className="small-button" onClick={() => openCallNotes(p)}>View / add notes</button><button type="button" className="small-button danger-button" onClick={() => deleteRecord(`/api/followups/${p.patient_id}`, "surgery follow-up")}>Delete follow-up</button></td><td>{p.mobile_number}</td><td>{p.department}<small>{p.doctor_name || "—"}</small></td><td>{p.surgery_date || "—"}{p.confirmed_surgery_date && <small>Confirmed: {p.confirmed_surgery_date}</small>}</td><td>{p.source || "—"}</td><td>{(p.followup_status || "PLANNED").replaceAll("_", " ")}</td><td><button className="small-button" onClick={() => openCallNotes(p)}>View / add notes</button></td></tr>)}{!surgeryPatients.length && <tr><td colSpan={7}>No surgery follow-ups match these filters.</td></tr>}</tbody></table></div></section>{notePatient && <section className="card"><h2>Call history: {notePatient.full_name}</h2><form onSubmit={saveCallNote}><label>Call outcome *<select required value={noteForm.call_outcome} onChange={e => setNoteForm({ ...noteForm, call_outcome: e.target.value })}>{[["CONTACTED","Patient contacted"],["NOT_REACHABLE","Not reachable"],["BUSY_CALLBACK","Busy / call back requested"],["WRONG_NUMBER","Wrong number"],["LEFT_MESSAGE","Message left"],["OTHER","Other"]].map(([v,l]) => <option key={v} value={v}>{l}</option>)}</select></label><label>Updated surgery status *<select required value={noteForm.status} onChange={e => setNoteForm({ ...noteForm, status: e.target.value })}>{[["PLANNED","Planned"],["CALLED","Called"],["CONFIRMED_FOR_SURGERY","Confirmed for surgery"],["REFUSED_FOR_SURGERY","Refused for surgery"],["RESCHEDULE_REQUESTED","Reschedule requested"],["NOT_REACHABLE","Not reachable"],["COMPLETED","Completed"]].map(([v,l]) => <option key={v} value={v}>{l}</option>)}</select></label>{noteForm.status === "CONFIRMED_FOR_SURGERY" && <label>Confirmed surgery date *<input required type="date" min={today} value={noteForm.confirmed_surgery_date} onChange={e => setNoteForm({ ...noteForm, confirmed_surgery_date: e.target.value })} /></label>}<label>Next call / follow-up date (optional)<input type="date" min={today} value={noteForm.next_followup_date} onChange={e => setNoteForm({ ...noteForm, next_followup_date: e.target.value })} /></label><label>Call notes *<textarea required rows={4} value={noteForm.notes} onChange={e => setNoteForm({ ...noteForm, notes: e.target.value })} placeholder="Record what the patient said, concerns, agreed date, next action…" /></label><button disabled={busy}>{busy ? "Saving…" : "Save call entry"}</button></form><p className="helper">Original planned date: {notePatient.surgery_date || "—"} · Confirmed date: {notePatient.confirmed_surgery_date || "Not confirmed"}</p><h3>Previous notes</h3><div className="table-scroll"><table><thead><tr><th>Date / time</th><th>Call outcome</th><th>Status</th><th>Confirmed surgery date</th><th>Next follow-up</th><th>Notes</th></tr></thead><tbody>{callNotes.map(n => <tr key={n.note_id}><td>{new Date(n.called_at).toLocaleString()}</td><td>{(n.call_outcome || "CONTACTED").replaceAll("_", " ")}</td><td>{n.status.replaceAll("_", " ")}</td><td>{n.confirmed_surgery_date || "—"}</td><td>{n.next_followup_date || "—"}</td><td>{n.notes}</td></tr>)}{!callNotes.length && <tr><td colSpan={6}>No call notes yet.</td></tr>}</tbody></table></div></section>}</div>}
 
-      {tab === "episodes" && <div className="page-grid"><section className="card"><h2>Create care episode</h2>{!selectedPatient && <div className="error">Select a patient first. You can find a patient from the first page.</div>}<p className="helper">The episode will be attached to the active patient shown above.</p><form autoComplete="off" onSubmit={submitEpisode}><label>Patient *<select required value={selectedPatientId || ef.patient_id} onChange={e => { setSelectedPatientId(e.target.value); setEf({ ...ef, patient_id: e.target.value }); }}><option value="">Select patient</option>{patients.map(p => <option key={p.patient_id} value={p.patient_id}>{p.patient_ref} — {p.full_name}</option>)}</select></label><label>Department *<select required value={ef.department} onChange={e => setEf({ ...ef, department: e.target.value, doctor_id: "", treating_doctor: "" })}>{departments.map(d => <option key={d}>{d}</option>)}</select></label><label>Treating doctor<select value={ef.doctor_id} onChange={e => { const d = managedDoctors.find(x => x.doctor_id === e.target.value); setEf({ ...ef, doctor_id: e.target.value, treating_doctor: d?.full_name || "" }); }}><option value="">Select doctor (optional)</option>{managedDoctors.filter(d => d.is_active !== false && d.department === ef.department).map(d => <option key={d.doctor_id} value={d.doctor_id}>{d.full_name}</option>)}</select></label><div className="two"><label>Admission date<input type="date" value={ef.admission_date} onChange={e => setEf({ ...ef, admission_date: e.target.value })} /></label><label>Discharge date *<input required type="date" value={ef.discharge_date} onChange={e => setEf({ ...ef, discharge_date: e.target.value })} /></label></div><div className="two"><label>Care starts *<input required type="date" value={ef.care_start_date} onChange={e => setEf({ ...ef, care_start_date: e.target.value })} /></label><label>Care ends *<input required type="date" min={ef.care_start_date} value={ef.care_end_date} onChange={e => setEf({ ...ef, care_end_date: e.target.value })} /></label></div><label>Reason / care notes<textarea rows={3} value={ef.reason_for_care} onChange={e => setEf({ ...ef, reason_for_care: e.target.value })} /></label><button disabled={busy || !selectedPatientId}>{busy ? "Creating…" : "Create episode and continue"}</button></form></section>
-        <section className="card"><h2>{selectedPatient ? `Episodes for ${selectedPatient.full_name}` : "Select a patient to view episodes"}</h2><div className="table-scroll"><table><thead><tr><th>Episode</th><th>Department / doctor</th><th>Care period</th><th>Status</th><th>Actions</th></tr></thead><tbody>{patientEpisodes.map(ep => <tr key={ep.episode_id} className={ep.episode_id === selectedEpisodeId ? "selected-row" : ""}><td>{ep.episode_ref}</td><td>{ep.department}<small>{ep.treating_doctor || "Doctor not set"}</small></td><td>{ep.care_start_date} → {ep.care_end_date}</td><td>{ep.status}</td><td><button className="small-button" onClick={() => { setSelectedEpisodeId(ep.episode_id); setTf(f => ({ ...f, episode_id: ep.episode_id })); setTab("tasks"); }}>{ep.episode_id === selectedEpisodeId ? "Selected" : "Add care task"}</button> <button type="button" className="small-button danger-button" onClick={() => deleteRecord(`/api/episodes/${ep.episode_id}`, "care episode")}>Delete</button></td></tr>)}{!patientEpisodes.length && <tr><td colSpan={5}>{selectedPatient ? "No episodes for this patient yet." : "Select a patient first."}</td></tr>}</tbody></table></div></section></div>}
+      {tab === "episodes" && <div className="page-grid"><section className="card"><h2>Create Visit</h2>{!selectedPatient && <div className="error">Select a patient first. You can find a patient from the first page.</div>}<p className="helper">The episode will be attached to the active patient shown above.</p><form autoComplete="off" onSubmit={submitEpisode}><label>Patient *<select required value={selectedPatientId || ef.patient_id} onChange={e => { setSelectedPatientId(e.target.value); setEf({ ...ef, patient_id: e.target.value }); }}><option value="">Select patient</option>{patients.map(p => <option key={p.patient_id} value={p.patient_id}>{p.patient_ref} — {p.full_name}</option>)}</select></label><label>Department *<select required value={ef.department} onChange={e => setEf({ ...ef, department: e.target.value, doctor_id: "", treating_doctor: "" })}>{departments.map(d => <option key={d}>{d}</option>)}</select></label><label>Treating doctor<select value={ef.doctor_id} onChange={e => { const d = managedDoctors.find(x => x.doctor_id === e.target.value); setEf({ ...ef, doctor_id: e.target.value, treating_doctor: d?.full_name || "" }); }}><option value="">Select doctor (optional)</option>{managedDoctors.filter(d => d.is_active !== false && d.department === ef.department).map(d => <option key={d.doctor_id} value={d.doctor_id}>{d.full_name}</option>)}</select></label><div className="two"><label>Admission date<input type="date" max={ef.discharge_date || undefined} value={ef.admission_date} onChange={e => setEf({ ...ef, admission_date: e.target.value })} /></label><label>Discharge date *<input required type="date" min={ef.admission_date || undefined} value={ef.discharge_date} onChange={e => setEf({ ...ef, discharge_date: e.target.value })} /></label></div><div className="two"><label>Care starts *<input required type="date" min={ef.discharge_date || undefined} value={ef.care_start_date} onChange={e => setEf({ ...ef, care_start_date: e.target.value })} /></label><label>Care ends *<input required type="date" min={ef.care_start_date} value={ef.care_end_date} onChange={e => setEf({ ...ef, care_end_date: e.target.value })} /></label></div><label>Reason / care notes<textarea rows={3} value={ef.reason_for_care} onChange={e => setEf({ ...ef, reason_for_care: e.target.value })} /></label><button disabled={busy || !selectedPatientId}>{busy ? "Creating…" : "Create Visit and continue"}</button></form></section>
+        <section className="card"><h2>{selectedPatient ? `Visits for ${selectedPatient.full_name}` : "Select a patient to view episodes"}</h2><div className="table-scroll"><table><thead><tr><th>Episode</th><th>Department / doctor</th><th>Care period</th><th>Status</th><th>Actions</th></tr></thead><tbody>{patientEpisodes.map(ep => <tr key={ep.episode_id} className={ep.episode_id === selectedEpisodeId ? "selected-row" : ""}><td>{ep.episode_ref}</td><td>{ep.department}<small>{ep.treating_doctor || "Doctor not set"}</small></td><td>{ep.care_start_date} → {ep.care_end_date}</td><td>{ep.status}</td><td><button className="small-button" onClick={() => { setSelectedEpisodeId(ep.episode_id); setTf(f => ({ ...f, episode_id: ep.episode_id })); setTab("tasks"); }}>{ep.episode_id === selectedEpisodeId ? "Selected" : "Add Reminder Task"}</button> <button type="button" className="small-button danger-button" onClick={() => deleteRecord(`/api/episodes/${ep.episode_id}`, "visit")}>Delete</button></td></tr>)}{!patientEpisodes.length && <tr><td colSpan={5}>{selectedPatient ? "No visits for this patient yet." : "Select a patient first."}</td></tr>}</tbody></table></div></section></div>}
 
-      {tab === "tasks" && <div className="page-grid"><section className="card"><h2>Add care task</h2>{!selectedPatient && <div className="error">Select a patient first.</div>}<p className="helper">Only care episodes belonging to the active patient are available here.</p><form autoComplete="off" onSubmit={submitTask}><label>Care episode *<select required value={tf.episode_id} onChange={e => setTf({ ...tf, episode_id: e.target.value })}><option value="">Select episode</option>{patientEpisodes.map(ep => <option key={ep.episode_id} value={ep.episode_id}>{ep.episode_ref} — {ep.department}</option>)}</select></label><label>Task type<select value={tf.task_type} onChange={e => setTf({ ...tf, task_type: e.target.value })}>{taskTypes.map(t => <option key={t}>{t}</option>)}</select></label><label>Task title *<input required value={tf.title} onChange={e => setTf({ ...tf, title: e.target.value })} /></label><label>Instructions<textarea rows={3} value={tf.instructions} onChange={e => setTf({ ...tf, instructions: e.target.value })} /></label><div className="two"><label>Start date *<input required type="date" min={episodes.find(ep => ep.episode_id === tf.episode_id)?.care_start_date} max={episodes.find(ep => ep.episode_id === tf.episode_id)?.care_end_date} value={tf.start_date} onChange={e => setTf({ ...tf, start_date: e.target.value, end_date: tf.end_date < e.target.value ? e.target.value : tf.end_date })} /></label><label>End date *<input required type="date" min={tf.start_date} max={episodes.find(ep => ep.episode_id === tf.episode_id)?.care_end_date} value={tf.end_date} onChange={e => setTf({ ...tf, end_date: e.target.value })} /></label></div><fieldset><legend>Reminder times *</legend><p className="muted">A preview is generated for each selected slot on every day in this date range.</p>{slots.map(s => <label className="check-row" key={s.value}><input type="checkbox" checked={tf.selected_slots.includes(s.value)} onChange={e => setTf(f => ({ ...f, selected_slots: e.target.checked ? [...f.selected_slots, s.value] : f.selected_slots.filter(x => x !== s.value) }))} /><span>{s.label}<small>{s.time}</small></span></label>)}</fieldset><button disabled={busy || !selectedPatientId || !patientEpisodes.length || !tf.episode_id || !tf.selected_slots.length}>{busy ? "Saving…" : "Add care task"}</button></form></section>
-        <section className="card"><h2>{selectedPatient ? `Tasks for ${selectedPatient.full_name}` : "Select a patient to view tasks"}</h2><div className="table-scroll"><table><thead><tr><th>Task</th><th>Type</th><th>Date range</th><th>Reminder slots</th><th>Episode</th><th>Status</th><th>Actions</th></tr></thead><tbody>{patientTasks.map(t => <tr key={t.task_id}><td>{t.title}<small>{t.instructions || ""}</small></td><td>{t.task_type}</td><td>{t.start_date} → {t.end_date}</td><td>{(t.selected_slots || []).map(s => slots.find(x => x.value === s)?.label || s).join(", ")}</td><td>{patientEpisodes.find(ep => ep.episode_id === t.episode_id)?.episode_ref || t.episode_id.slice(0, 8)}</td><td>{t.status}</td><td><button type="button" className="small-button danger-button" onClick={() => deleteRecord(`/api/tasks/${t.task_id}`, "care task")}>Delete</button></td></tr>)}{!patientTasks.length && <tr><td colSpan={7}>{selectedPatient ? "No tasks for this patient yet." : "Select a patient first."}</td></tr>}</tbody></table></div></section></div>}
+      {tab === "tasks" && <div className="page-grid"><section className="card"><h2>Add Reminder Task</h2>{!selectedPatient && <div className="error">Select a patient first.</div>}<p className="helper">Only visits belonging to the active patient are available here.</p><form autoComplete="off" onSubmit={submitTask}><label>Visit *<select required value={tf.episode_id} onChange={e => setTf({ ...tf, episode_id: e.target.value })}><option value="">Select episode</option>{patientEpisodes.map(ep => <option key={ep.episode_id} value={ep.episode_id}>{ep.episode_ref} — {ep.department}</option>)}</select></label><label>Task type<select value={tf.task_type} onChange={e => setTf({ ...tf, task_type: e.target.value })}>{taskTypes.map(t => <option key={t}>{t}</option>)}</select></label><label>Task title *<input required value={tf.title} onChange={e => setTf({ ...tf, title: e.target.value })} /></label><label>Instructions<textarea rows={3} value={tf.instructions} onChange={e => setTf({ ...tf, instructions: e.target.value })} /></label><div className="two"><label>Start date *<input required type="date" min={episodes.find(ep => ep.episode_id === tf.episode_id)?.care_start_date} max={episodes.find(ep => ep.episode_id === tf.episode_id)?.care_end_date} value={tf.start_date} onChange={e => setTf({ ...tf, start_date: e.target.value, end_date: tf.end_date < e.target.value ? e.target.value : tf.end_date })} /></label><label>End date *<input required type="date" min={tf.start_date} max={episodes.find(ep => ep.episode_id === tf.episode_id)?.care_end_date} value={tf.end_date} onChange={e => setTf({ ...tf, end_date: e.target.value })} /></label></div><fieldset><legend>Reminder times *</legend><p className="muted">A preview is generated for each selected slot on every day in this date range.</p>{slots.map(s => <label className="check-row" key={s.value}><input type="checkbox" checked={tf.selected_slots.includes(s.value)} onChange={e => setTf(f => ({ ...f, selected_slots: e.target.checked ? [...f.selected_slots, s.value] : f.selected_slots.filter(x => x !== s.value) }))} /><span>{s.label}<small>{s.time}</small></span></label>)}</fieldset><button disabled={busy || !selectedPatientId || !patientEpisodes.length || !tf.episode_id || !tf.selected_slots.length}>{busy ? "Saving…" : "Add Reminder Task"}</button></form></section>
+        <section className="card"><h2>{selectedPatient ? `Reminder Tasks for ${selectedPatient.full_name}` : "Select a patient to view tasks"}</h2><div className="table-scroll"><table><thead><tr><th>Task</th><th>Type</th><th>Date range</th><th>Reminder slots</th><th>Episode</th><th>Status</th><th>Actions</th></tr></thead><tbody>{patientTasks.map(t => <tr key={t.task_id}><td>{t.title}<small>{t.instructions || ""}</small></td><td>{t.task_type}</td><td>{t.start_date} → {t.end_date}</td><td>{(t.selected_slots || []).map(s => slots.find(x => x.value === s)?.label || s).join(", ")}</td><td>{patientEpisodes.find(ep => ep.episode_id === t.episode_id)?.episode_ref || t.episode_id.slice(0, 8)}</td><td>{t.status}</td><td><button type="button" className="small-button danger-button" onClick={() => deleteRecord(`/api/tasks/${t.task_id}`, "Reminder Task")}>Delete</button></td></tr>)}{!patientTasks.length && <tr><td colSpan={7}>{selectedPatient ? "No Reminder Reminder Tasks for this patient yet." : "Select a patient first."}</td></tr>}</tbody></table></div></section></div>}
       <footer>Care Plus MVP · Local development · Reminder previews are logs only and do not send SMS, WhatsApp, or calls</footer>
     </main>
   </div>;

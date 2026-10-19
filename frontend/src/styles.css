@@ -284,3 +284,17 @@
   overflow-wrap: anywhere;
   margin-top: 4px;
 }
+
+
+.nav-section-title {
+  padding: 18px 12px 8px;
+  color: #E8C878;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+}
+
+nav .nav-section-title:first-child {
+  padding-top: 12px;
+}
