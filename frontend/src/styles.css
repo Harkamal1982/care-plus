@@ -298,3 +298,7 @@
 nav .nav-section-title:first-child {
   padding-top: 12px;
 }
+
+/* Top-right signed-in user controls */
+.header-actions{display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap}.user-menu{display:flex;align-items:center;gap:9px;padding:7px 9px;background:#fff;border:1px solid #e3ebe6;border-radius:10px}.user-avatar{display:grid;place-items:center;width:32px;height:32px;border-radius:50%;background:#dff1e3;color:#174c3e;font-weight:800;font-size:13px}.user-menu div{display:flex;flex-direction:column;gap:2px;min-width:0}.user-menu strong{font-size:12px;color:#20302d;white-space:nowrap}.user-menu small{font-size:10px;color:#82948a;text-transform:capitalize}.user-menu .secondary{padding:7px 9px}
+@media(max-width:650px){header{align-items:flex-start}.header-actions{max-width:100%}.user-menu{gap:6px;padding:5px}.user-menu strong{max-width:100px;overflow:hidden;text-overflow:ellipsis}.user-menu .secondary{font-size:10px;padding:6px}}
