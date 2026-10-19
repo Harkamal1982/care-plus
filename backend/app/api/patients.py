@@ -21,10 +21,12 @@ router = APIRouter(
 )
 
 
+
 def next_patient_ref(db: Session) -> str:
-    # Simple local-MVP generator; replace with a DB sequence for concurrent production use.
-    count = db.scalar(select(func.count()).select_from(Patient)) or 0
-    return f"PAT-{count + 1:06d}"
+    next_number = db.scalar(
+        text("SELECT nextval('patient_ref_seq')")
+    )
+    return f"PAT-{next_number:06d}"
 
 
 @router.post("", response_model=PatientResponse, status_code=201)
