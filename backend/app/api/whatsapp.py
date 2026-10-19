@@ -226,6 +226,7 @@ def progress(
         select(WhatsAppEvent, Patient, CareEpisode)
         .outerjoin(Patient, Patient.patient_id == WhatsAppEvent.patient_id)
         .outerjoin(CareEpisode, CareEpisode.episode_id == WhatsAppEvent.episode_id)
+        .where(WhatsAppEvent.episode_id.is_not(None))
         .order_by(WhatsAppEvent.received_at.desc())
         .limit(500)
     )
@@ -431,20 +432,20 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)):
                         if sender_key
                         else []
                     )
-                    patient = matches[0] if len(matches) == 1 else None
+                    # Resolve shared mobile numbers deterministically: prefer the
+                    # latest DISCHARGE patient, then latest patient_id/created_at.
+                    matches.sort(key=lambda p: (p.created_at or datetime.min.replace(tzinfo=timezone.utc), str(p.patient_id)), reverse=True)
+                    discharge_matches = [p for p in matches if p.registration_flow == "DISCHARGE"]
+                    patient = (discharge_matches or matches)[0] if matches else None
 
                     episode = None
                     if patient:
-                        active_eps = db.scalars(
+                        episode = db.scalars(
                             select(CareEpisode)
-                            .where(
-                                CareEpisode.patient_id == patient.patient_id,
-                                CareEpisode.status == "ACTIVE",
-                            )
-                            .limit(2)
-                        ).all()
-                        if len(active_eps) == 1:
-                            episode = active_eps[0]
+                            .where(CareEpisode.patient_id == patient.patient_id)
+                            .order_by(CareEpisode.created_at.desc(), CareEpisode.episode_id.desc())
+                            .limit(1)
+                        ).first()
 
                     if message_type == "image":
                         text_body = caption or "Image received via WhatsApp"
