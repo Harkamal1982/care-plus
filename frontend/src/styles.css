@@ -315,9 +315,9 @@ nav .nav-section-title:first-child {
 .login-brand-logo{width:min(100%,280px);margin:0 auto 22px;border-radius:10px}
 .login-card{text-align:left}
 .login-card .login-brand-logo{margin-left:auto;margin-right:auto}
-.primary-action{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid #00b894;border-radius:9px;background:#00b894;color:#073b3d;padding:11px 17px;font-size:12px;font-weight:800;box-shadow:0 3px 8px rgba(0,184,148,.16);transition:background .15s ease,transform .15s ease,box-shadow .15s ease}
-.primary-action:hover{background:#00a985;box-shadow:0 5px 12px rgba(0,130,105,.2);transform:translateY(-1px)}
-.primary-action:focus-visible{outline:3px solid #8be8d1;outline-offset:2px}
+.primary-action{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:0;border-radius:8px;background:#174c3e;color:#fff;padding:11px;font-size:12px;font-weight:700;box-shadow:none;transition:background .15s ease,transform .15s ease}
+.primary-action:hover{background:#123b35;box-shadow:none;transform:translateY(-1px)}
+.primary-action:focus-visible{outline:3px solid #cde7d6;outline-offset:2px}
 .primary-action:disabled{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
 .filter-action{margin-top:12px;min-width:140px}
 @media(max-width:650px){.sidebar-brand-logo{width:42px;height:42px;object-fit:cover;object-position:left center;margin-bottom:14px;border-radius:9px}.shell aside{overflow:hidden}}
