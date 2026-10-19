@@ -302,3 +302,22 @@ nav .nav-section-title:first-child {
 /* Top-right signed-in user controls */
 .header-actions{display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap}.user-menu{display:flex;align-items:center;gap:9px;padding:7px 9px;background:#fff;border:1px solid #e3ebe6;border-radius:10px}.user-avatar{display:grid;place-items:center;width:32px;height:32px;border-radius:50%;background:#dff1e3;color:#174c3e;font-weight:800;font-size:13px}.user-menu div{display:flex;flex-direction:column;gap:2px;min-width:0}.user-menu strong{font-size:12px;color:#20302d;white-space:nowrap}.user-menu small{font-size:10px;color:#82948a;text-transform:capitalize}.user-menu .secondary{padding:7px 9px}
 @media(max-width:650px){header{align-items:flex-start}.header-actions{max-width:100%}.user-menu{gap:6px;padding:5px}.user-menu strong{max-width:100px;overflow:hidden;text-overflow:ellipsis}.user-menu .secondary{font-size:10px;padding:6px}}
+
+
+/* Company copyright footer */
+.copyright-footer{margin-top:28px;padding:16px 8px 8px;text-align:center;color:#82948a;font-size:11px;border-top:1px solid #e3ebe6}
+.login-main .copyright-footer{border-top:0;margin-top:20px}
+
+
+/* Care Plus brand identity and consistent primary actions */
+.brand-logo{display:block;height:auto;object-fit:contain}
+.sidebar-brand-logo{width:100%;max-width:190px;margin:0 auto 18px;border-radius:8px}
+.login-brand-logo{width:min(100%,280px);margin:0 auto 22px;border-radius:10px}
+.login-card{text-align:left}
+.login-card .login-brand-logo{margin-left:auto;margin-right:auto}
+.primary-action{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid #00b894;border-radius:9px;background:#00b894;color:#073b3d;padding:11px 17px;font-size:12px;font-weight:800;box-shadow:0 3px 8px rgba(0,184,148,.16);transition:background .15s ease,transform .15s ease,box-shadow .15s ease}
+.primary-action:hover{background:#00a985;box-shadow:0 5px 12px rgba(0,130,105,.2);transform:translateY(-1px)}
+.primary-action:focus-visible{outline:3px solid #8be8d1;outline-offset:2px}
+.primary-action:disabled{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
+.filter-action{margin-top:12px;min-width:140px}
+@media(max-width:650px){.sidebar-brand-logo{width:42px;height:42px;object-fit:cover;object-position:left center;margin-bottom:14px;border-radius:9px}.shell aside{overflow:hidden}}
